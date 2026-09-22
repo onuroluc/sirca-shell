@@ -51,6 +51,13 @@ case "$PV" in 6.6*) ok "KDE Plasma $PV" ;; 6.7*) warn "KDE Plasma $PV: built and
 pgrep -x kwin_wayland >/dev/null 2>&1 && ok "KWin is the compositor" || { bad "kwin_wayland is not running. Other compositors (Hyprland, Sway, GNOME) are not supported."; FATAL=1; }
 for t in cmake g++ git python3; do have $t || { bad "missing: $t"; FATAL=1; }; done
 [ $FATAL = 0 ] && ok "build tools: cmake, g++, python3"
+# KDE's shared CMake modules (issue #3, patch by leissa): the shell, the KWin effect and the Qt style all begin with
+# find_package(ECM); without it all three stop at "Could not find ECM" before a file is compiled.
+ECM_OK=0
+for d in "${ECM_DIR:-}" /usr/share/ECM/cmake /usr/share/cmake/ECM /usr/lib64/cmake/ECM /usr/lib/cmake/ECM /usr/lib/x86_64-linux-gnu/cmake/ECM /usr/local/share/ECM/cmake; do
+    [ -n "$d" ] && [ -f "$d/ECMConfig.cmake" ] && ECM_OK=1
+done
+[ $ECM_OK = 1 ] && ok "extra-cmake-modules (KDE's CMake modules)" || { bad "extra-cmake-modules is not installed (that is the package name on Ubuntu, Fedora and Arch alike): the shell, the KWin effect and the Qt style all begin with find_package(ECM) and none of them can configure without it."; FATAL=1; }
 PYS=/usr/bin/python3; [ -x "$PYS" ] || PYS=python3        # the tools run with the system python
 GPU="$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -1 | sed 's/.*: //')"
 case "$GPU" in *NVIDIA*|*nvidia*) ok "GPU: ${GPU:0:60}  (what this was developed on)" ;; "") warn "GPU not detected" ;; *) warn "GPU: ${GPU:0:60}  — AMD and Intel are untested by the author. It should work; please report what you see." ;; esac
