@@ -129,7 +129,7 @@ known look keys with sane values, never runs anything, keeps your own wallpapers
 | KDE Plasma 6.6 on **Wayland**, KWin as the compositor | works, this is what it is built and used on |
 | X11 session, other compositors | no: the shell is layer-shell windows plus KWin's D-Bus and protocols |
 | One screen | works; the bar and dock are on the primary output |
-| Several screens | not yet: the other screens get no bar or dock |
+| Several screens | wallpaper on every screen; the bar and dock on the primary, or on any screen you choose in edit mode (Screens). Tested with virtual screens only |
 | Without plasmashell (`sirca-shell-switch plasma off`) | works for daily use; Plasma's desktop widgets and its clipboard applet are gone, the shell brings its own wallpaper, clipboard and notifications |
 | The glass look (blur, refraction, rim) | needs the companion KWin effect; without it the bar and dock are plain translucent surfaces |
 | Light and dark | both; with the companion `glass-mode` script the whole desktop switches with one cross-fade |
