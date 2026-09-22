@@ -69,10 +69,11 @@ body, #main, .Root, .Root__top-container { background-color: var(--spice-sidebar
 .main-home-filterChipsContainer { padding-top: 6px; }
 /* chips: the desktop's pills (selected = the accent, not a white blob). Spotify's component classes carry a build number
    ("e-10451-legacy-chip__inner"), so they are matched by their stable part. */
-[class*="legacy-chip__inner"], [class*="ChipInner"] { background: var(--g-fill) !important; box-shadow: inset 0 0 0 1px var(--g-line) !important; color: var(--spice-text) !important;
+[class*="legacy-chip__inner"], [class*="ChipInner"] { background: var(--g-fill-hover) !important; font-size: 12px !important; min-height: 28px !important; padding: 0 14px !important; box-shadow: inset 0 0 0 1px var(--g-line) !important; color: var(--spice-text) !important;
   border-radius: 999px !important; font-weight: 500 !important; transition: background-color 120ms var(--g-ease); }
 [class*="legacy-chip__inner"]:hover, [class*="ChipInner"]:hover { background: var(--g-fill-hover) !important; }
-[class*="legacy-chip__inner--selected"], [aria-checked="true"] > [class*="legacy-chip__inner"], [aria-checked="true"] [class*="ChipInner"] { background: var(--spice-button) !important; color: #fff !important; box-shadow: none !important; }
+/* the selected chip is the text colour on the surface (as the edit mode's "Scaled" chip), not the accent: the accent is for play */
+[class*="legacy-chip__inner--selected"], [aria-checked="true"] > [class*="legacy-chip__inner"], [aria-checked="true"] [class*="ChipInner"] { background: var(--spice-text) !important; color: var(--spice-main) !important; font-weight: 600 !important; box-shadow: none !important; }
 /* the chips row sticks to the top while scrolling: frosted chrome instead of a black veil */
 .main-home-filterChipsSection::after { background: rgba(var(--spice-rgb-main), 0.78) !important; backdrop-filter: blur(18px) saturate(1.2); border-bottom: 1px solid var(--g-line); }
 /* carousels fade out at their edges with a hard-coded near-black: use the panel colour (light mode showed a dark smear) */
@@ -120,9 +121,7 @@ body, #main, .Root, .Root__top-container { background-color: var(--spice-sidebar
 
 /* ---- the player: a floating island like the dock ---- */
 .Root__now-playing-bar { background: transparent !important; border: 0 !important; }
-.main-nowPlayingBar-container { background-color: var(--spice-main) !important; background-image: var(--g-sheen) !important; border: 0 !important; border-radius: var(--g-r-panel) !important;
-  box-shadow: inset 0 0 0 1px var(--g-line) !important; margin: 0 !important; }
-.main-nowPlayingBar-nowPlayingBar { height: 72px !important; padding: 0 14px !important; }
+/* (the island itself is set in the LAYOUT REBUILD section below: the container is plain, the bar is the island) */
 [data-testid="control-button-playpause"] { background: var(--spice-button) !important; color: #fff !important; width: 36px !important; height: 36px !important; min-block-size: 36px !important; border-radius: 999px !important; box-shadow: none !important; }
 [data-testid="control-button-playpause"] { display: flex !important; align-items: center !important; justify-content: center !important; padding: 0 !important; }
 [data-testid="control-button-playpause"] > span { background: transparent !important; width: 100% !important; height: 100% !important; min-block-size: 0 !important; display: flex !important; align-items: center !important; justify-content: center !important; transform: none !important; }
@@ -156,6 +155,95 @@ input[type="text"], input[type="search"], textarea, select { border-radius: var(
 /* ---- scrollbars: slim, only a thumb ---- */
 .os-scrollbar-handle, ::-webkit-scrollbar-thumb { border-radius: 999px !important; background-color: rgba(var(--spice-rgb-text), 0.20) !important; }
 .os-scrollbar-vertical { width: 8px !important; padding: 2px !important; } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: transparent; }
+
+
+/* ======== FLAT LAYOUT (2026-09-22, replaces the island layout of the same day; agreed on a mock) ========
+   One surface. No islands, no rims, no pills: the library, the main view and the player are separated by hairlines only.
+   Radius survives on artwork and controls (8-12 px). The accent play circle is the one round control. */
+:root { --g-hair: rgba(var(--spice-rgb-text), 0.10); --g-r-ctl: 8px; --g-r-art: 12px; }
+/* -- the grid: no gutters, the window's own edge is the only rounding */
+/* Spotify's grid has FOUR rows (top-banner, global-nav, the columns, now-playing-bar) with fixed heights of 48 and 73 px, and
+   pulls the nav and the player 8 px into the columns with negative margins (its own rounded panels overlap on purpose).
+   Flat, that put the nav's hairline 8 px below the columns' top edge and the player 8 px over the content and past the
+   window's bottom. The rows take their content's height and nothing overlaps. */
+.Root__top-container { --g-gap: 0px; gap: 0 !important; padding: 0 !important; grid-template-rows: auto auto minmax(0, 1fr) auto !important; }
+.Root__globalNav, .Root__now-playing-bar { margin-top: 0 !important; margin-bottom: 0 !important; }
+.Root__main-view, .Root__nav-bar, .Root__right-sidebar { min-height: 0 !important; }
+.Root__main-view, .Root__nav-bar, .Root__nav-bar nav, .main-yourLibraryX-entryPoints, .main-yourLibraryX-libraryContainer, .Root__right-sidebar > *, .Root__right-sidebar-overlay, .Root__right-sidebar-peek {
+  border-radius: 0 !important; box-shadow: none !important; background-image: none !important; background-color: transparent !important; }
+.Root__nav-bar { border-right: 1px solid var(--g-hair) !important; padding: 0 !important; }
+.Root__right-sidebar { border-left: 1px solid var(--g-hair) !important; }
+.LayoutResizer__resize-bar { opacity: 0; }
+/* -- top row: flat, a hairline under it; nav buttons without circles; the search field a low rectangle */
+.Root__globalNav { height: 64px !important; padding: 0 18px !important; border-bottom: 1px solid var(--g-hair) !important; }
+.main-globalNav-historyButtons button, .main-globalNav-contentRight button, .main-actionButtons button { width: 32px !important; height: 32px !important; min-block-size: 32px !important; border-radius: var(--g-r-ctl) !important; background: transparent !important; color: var(--spice-subtext) !important; }
+.main-globalNav-historyButtons button:hover, .main-globalNav-contentRight button:hover, .main-actionButtons button:hover { background: var(--g-fill-hover) !important; color: var(--spice-text) !important; }
+.main-globalNav-historyButtons button svg, .main-globalNav-contentRight button svg { width: 14px !important; height: 14px !important; }
+.main-globalNav-searchContainer { height: 36px !important; max-width: 480px !important; border-radius: 10px !important; background: var(--g-fill) !important; box-shadow: none !important; padding-left: 4px !important; }
+.main-globalNav-searchContainer:focus-within { box-shadow: inset 0 0 0 1px var(--g-line-strong) !important; }
+.main-globalNav-searchContainer > button[aria-label="Home"], .main-globalNav-browseButtonWrapper, .main-globalNav-searchInputContainer kbd { display: none !important; }
+.main-globalNav-searchInputContainer input { padding-left: 44px !important; font-size: 13.5px !important; }
+.main-globalNav-searchInputContainer input::placeholder { color: var(--spice-subtext) !important; }
+[data-testid="user-widget-link"] { width: 32px !important; height: 32px !important; min-block-size: 32px !important; box-shadow: none !important; background: transparent !important; }
+[data-testid="user-widget-link"] figure, [data-testid="user-widget-link"] img { border-radius: var(--g-r-ctl) !important; }
+/* -- chips everywhere: text tabs with an underline, no pills */
+[class*="legacy-chip__inner"], [class*="ChipInner"] { background: transparent !important; box-shadow: none !important; border-radius: 0 !important; color: var(--spice-subtext) !important;
+  font-size: 12.5px !important; font-weight: 500 !important; min-height: 26px !important; padding: 0 2px !important; margin-right: 12px !important; border-bottom: 2px solid transparent !important; }
+[class*="legacy-chip__inner"]:hover, [class*="ChipInner"]:hover { background: transparent !important; color: var(--spice-text) !important; }
+[class*="legacy-chip__inner--selected"], [aria-checked="true"] > [class*="legacy-chip__inner"], [aria-checked="true"] [class*="ChipInner"] { background: transparent !important; color: var(--spice-text) !important; font-weight: 600 !important; border-bottom-color: var(--spice-text) !important; }
+/* -- library: plain column, small radii */
+.main-yourLibraryX-header { padding: 18px 16px 6px !important; }
+.main-yourLibraryX-header h1, .main-yourLibraryX-header span[class*="text"] { font-size: 12px !important; font-weight: 600 !important; letter-spacing: 0.06em !important; text-transform: uppercase !important; color: var(--spice-subtext) !important; }
+.main-yourLibraryX-filterArea { padding: 0 16px 8px !important; }
+.main-yourLibraryX-listItem, [data-testid="rootlist-item"], .main-useDropTarget-base { border-radius: var(--g-r-ctl) !important; }
+.main-yourLibraryX-listItem img, .main-yourLibraryX-listItem .x-entityImage-imageContainer, [data-testid="rootlist-item"] img, .main-yourLibraryX-navItem img { border-radius: var(--g-r-ctl) !important; }
+.main-yourLibraryX-listItem:hover { background: var(--g-fill) !important; }
+.main-yourLibraryX-listItem[aria-selected="true"], .main-yourLibraryX-listItem[data-selected="true"] { background: var(--g-fill-hover) !important; }
+.main-yourLibraryX-listItemGroup { gap: 1px !important; }
+/* the collapsed rail: same, just narrower */
+.main-yourLibraryX-navItem, .main-yourLibraryX-navLink { border-radius: var(--g-r-ctl) !important; }
+/* -- main view: quiet type; tiles low rectangles; cards = picture + text, no panel */
+.main-home-homeHeader { padding-top: 8px !important; }
+.main-home-filterChipsSection { padding: 14px 30px 4px !important; }
+.main-home-filterChipsSection, .main-home-homeHeader { background: transparent !important; background-image: none !important; box-shadow: none !important; backdrop-filter: none !important; }
+section[data-testid="home-page"] > div, .main-home-content { padding-left: 30px !important; padding-right: 30px !important; }
+section[data-testid="home-page"] h1 { font-size: 22px !important; font-weight: 600 !important; letter-spacing: -0.01em !important; margin: 4px 0 14px !important; }
+section[data-testid="home-page"] h2, .main-shelf-title { font-size: 16px !important; font-weight: 600 !important; letter-spacing: -0.005em !important; }
+.main-shelf-header p { font-size: 12px !important; color: var(--spice-subtext) !important; }
+.main-shelf-header a, .main-shelf-seeAll { font-size: 12px !important; font-weight: 400 !important; color: var(--spice-subtext) !important; text-transform: none !important; letter-spacing: 0 !important; }
+.search-searchCategory-contentArea { margin-left: 0 !important; margin-right: 0 !important; }
+section[data-testid="home-page"] [role="grid"] { padding-left: 0 !important; padding-right: 0 !important; margin-left: 0 !important; margin-right: 0 !important; column-gap: 18px !important; row-gap: 22px !important; }   /* the cards' inner padding was the gap; without panels the grid needs its own */
+[data-testid="shortcut-background"], .view-homeShortcutsGrid-shortcut { border-radius: 10px !important; background: var(--g-fill) !important; box-shadow: none !important; overflow: hidden; }
+[data-testid="shortcut-background"]:hover, .view-homeShortcutsGrid-shortcut:hover { background: var(--g-fill-hover) !important; }
+.view-homeShortcutsGrid-shortcut img, [data-testid="shortcut-background"] img, .view-homeShortcutsGrid-shortcut .x-entityImage-imageContainer { border-radius: 0 !important; }
+.view-homeShortcutsGrid-shortcut span, .view-homeShortcutsGrid-shortcut a { font-size: 13.5px !important; font-weight: 500 !important; }
+.view-homeShortcutsGrid-shortcut .main-playButton-PlayButton { opacity: 0 !important; transition: opacity 120ms var(--g-ease) !important; }
+.view-homeShortcutsGrid-shortcut:hover .main-playButton-PlayButton, .view-homeShortcutsGrid-shortcut:focus-within .main-playButton-PlayButton { opacity: 1 !important; }
+.main-card-card, [data-testid="card"], .main-card-cardContainer { border-radius: 0 !important; background: transparent !important; box-shadow: none !important; padding: 0 !important; }
+.main-card-card:hover, [data-testid="card"]:hover { background: transparent !important; }
+.main-card-imageContainer, .main-card-card img, .main-cardImage-image, .main-cardImage-imageWrapper, [data-testid="card-image"] { border-radius: var(--g-r-art) !important; box-shadow: none !important; }
+.main-card-cardMetadata { padding: 10px 0 0 !important; }
+.main-card-cardMetadata a, .main-card-cardMetadata .main-cardHeader-text { font-size: 13px !important; font-weight: 500 !important; }
+.main-card-cardMetadata .main-cardSubHeader-root, .main-card-cardMetadata span { font-size: 11.5px !important; color: var(--spice-subtext) !important; }
+.main-card-PlayButtonContainer button, .main-playButton-PlayButton button { width: 40px !important; height: 40px !important; background: var(--spice-button) !important; box-shadow: 0 8px 20px rgba(0,0,0,0.35) !important; }
+/* -- the player: a full-width band with a hairline above; the progress line runs along its top edge */
+.Root__now-playing-bar { padding: 0 !important; background: transparent !important; box-shadow: none !important; border-top: 1px solid var(--g-hair) !important; }
+[data-testid="now-playing-bar"], .main-nowPlayingBar-container { width: 100% !important; max-width: none !important; height: 88px !important; border-radius: 0 !important; background: rgba(var(--spice-rgb-text), 0.025) !important; background-image: none !important; box-shadow: none !important; padding: 0 !important; margin: 0 !important; }
+.main-nowPlayingBar-nowPlayingBar { width: 100% !important; max-width: none !important; height: 88px !important; background: transparent !important; box-shadow: none !important; border-radius: 0 !important; padding: 0 26px !important; margin: 0 !important; }
+[data-testid="cover-art-button"], [data-testid="cover-art-button"] img, [data-testid="CoverSlotCollapsed__container"], .main-coverSlotCollapsed-container img, .main-nowPlayingWidget-coverArt .cover-art, .main-nowPlayingWidget-coverArt img { border-radius: var(--g-r-ctl) !important; width: 52px !important; height: 52px !important; }
+[data-testid="context-item-info-title"] a, .main-trackInfo-name a { font-size: 13.5px !important; font-weight: 600 !important; }
+.main-trackInfo-artists a, [data-testid="context-item-info-subtitles"] a { font-size: 12px !important; color: var(--spice-subtext) !important; }
+[data-testid="player-controls"] { max-width: 480px !important; }
+[data-testid="control-button-playpause"] { width: 40px !important; height: 40px !important; min-block-size: 40px !important; background: var(--spice-button) !important; }
+[data-testid="control-button-playpause"] svg { fill: #fff !important; color: #fff !important; }
+.player-controls__buttons button:not([data-testid="control-button-playpause"]):hover, .main-nowPlayingBar-extraControls button:hover { border-radius: var(--g-r-ctl) !important; }
+[data-testid="playback-progressbar"] { height: 4px !important; }
+[data-testid="playback-position"], [data-testid="playback-duration"] { font-size: 10.5px !important; color: var(--spice-subtext) !important; min-width: 36px !important; }
+.main-nowPlayingBar-right button:not(:hover) { color: var(--spice-subtext) !important; }
+.x-progressBar-progressBarBg, .x-progressBar-fillColor, .x-progressBar-sliderArea { border-radius: 0 !important; }
+/* -- menus, dialogs and tooltips keep a small radius (they are popups, like the desktop's), buttons and inputs the control radius */
+.main-contextMenu-menu, .main-contextMenu-tippy, [data-tippy-root] [role="tooltip"], .encore-tooltip { border-radius: 10px !important; }
+button, input, [role="button"] { border-radius: var(--g-r-ctl); }
 
 /* ======== MINI PLAYER ========
    Spotify's main window cannot be made smaller than 800x600 (enforced by the app itself, not by the window manager), so the

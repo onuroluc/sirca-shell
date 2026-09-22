@@ -89,7 +89,7 @@ Window {
                         Repeater { model: row.modelData.t === "themes" ? dm.themeNames : []
                             Item { id: sw; required property string modelData; readonly property bool cur: Config.theme === modelData; width: 24; height: 24
                                 Rectangle { anchors.fill: parent; radius: 12; color: "transparent"; border.width: 2; border.color: sw.cur ? Config.fgSolid : "transparent" }
-                                Rectangle { anchors.centerIn: parent; width: 15; height: 15; radius: 7.5; color: (Config.themes[sw.modelData] || {}).accent || "#888"   // literal-ok: fallback swatch
+                                Rectangle { anchors.centerIn: parent; width: 16; height: 16; radius: 8; color: (Config.themes[sw.modelData] || {}).accent || "#888"   // literal-ok: fallback swatch. 16 in 24: a whole-pixel offset (15 sat at 4.5 px: the disc drifted off the ring)
                                     scale: swh.hovered && !sw.cur ? 1.18 : 1; Behavior on scale { NumberAnimation { duration: Config.quick } } }
                                 HoverHandler { id: swh; cursorShape: Qt.PointingHandCursor }
                                 TapHandler { onTapped: dm.run("theme:" + sw.modelData) } } } }

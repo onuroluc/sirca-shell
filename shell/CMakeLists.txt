@@ -9,7 +9,13 @@ set(CMAKE_MODULE_PATH ${ECM_MODULE_PATH})
 include(KDEInstallDirs)
 include(KDECMakeSettings)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 DBus Widgets Concurrent)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 DBus Widgets Concurrent Network)
+# the commit this build comes from (the update check compares it with the repository's main branch)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} OUTPUT_VARIABLE GLASS_BUILD_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT GLASS_BUILD_COMMIT)
+    execute_process(COMMAND git -C ${CMAKE_SOURCE_DIR}/.. rev-parse HEAD OUTPUT_VARIABLE GLASS_BUILD_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+endif()
+add_compile_definitions(GLASS_BUILD_COMMIT="${GLASS_BUILD_COMMIT}")
 find_package(LayerShellQt REQUIRED)
 find_package(KF6WindowSystem REQUIRED)
 find_package(KF6 REQUIRED COMPONENTS Package Config I18n GlobalAccel Service GuiAddons)
@@ -87,7 +93,7 @@ qt_add_qml_module(sirca-shell
         qml/control/lib/Tile.qml
 )
 target_include_directories(sirca-shell PRIVATE src)
-target_link_libraries(sirca-shell PRIVATE Qt6::Concurrent Qt6::Quick Qt6::QuickControls2 Qt6::DBus Qt6::Widgets LayerShellQt::Interface KF6::WindowSystem KF6::GlobalAccel KF6::Package KF6::ConfigCore KF6::I18n Plasma::Plasma Plasma::PlasmaQuick Plasma::KWaylandClient KF6::Service KF6::GuiAddons)
+target_link_libraries(sirca-shell PRIVATE Qt6::Network Qt6::Concurrent Qt6::Quick Qt6::QuickControls2 Qt6::DBus Qt6::Widgets LayerShellQt::Interface KF6::WindowSystem KF6::GlobalAccel KF6::Package KF6::ConfigCore KF6::I18n Plasma::Plasma Plasma::PlasmaQuick Plasma::KWaylandClient KF6::Service KF6::GuiAddons)
 install(TARGETS sirca-shell DESTINATION ${KDE_INSTALL_BINDIR})
 # KWin matches the desktop file by its Exec path, so it has to carry the path the binary is really installed to
 set(SIRCA_SHELL_BINDIR "${CMAKE_INSTALL_PREFIX}/${KDE_INSTALL_BINDIR}")

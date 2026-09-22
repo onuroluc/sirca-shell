@@ -108,6 +108,13 @@ Window {
                     Section { title: "Calendar"
                         Row_ { label: "Native calendar"; hint: "The popup behind the clock. Off = the hosted Plasma clock applet"; key: "nativeCalendar"
                             GlassSwitch { checked: Config.nativeCalendar; onToggled: on => win.setKey("nativeCalendar", on, true) } } }
+                    Section { title: "Updates"
+                        Row_ { label: "Check for updates"; hint: "Once a day the shell asks GitHub whether the repository has moved on from this build (" + Shell.buildCommit.substring(0, 7) + "). Nothing else is sent. A notification then offers to update"; key: "updateCheck"
+                            GlassSwitch { checked: Config.get("updateCheck", false) === true; onToggled: on => win.setKey("updateCheck", on, true) } }
+                        Row_ { label: "Check now"; hint: "Asks right away and tells you either way"
+                            Rectangle { width: cnt.implicitWidth + 24; height: 28; radius: 14; color: Config.fg(cnh.hovered ? 0.16 : 0.09)
+                                Text { id: cnt; anchors.centerIn: parent; text: "Check now"; color: Config.ink; font.pixelSize: 12 }
+                                HoverHandler { id: cnh; cursorShape: Qt.PointingHandCursor } TapHandler { onTapped: Shell.checkForUpdate(true) } } } }
                     Section { title: "Notifications"
                         Row_ { label: "Native notifications"; hint: "Cards and history drawn by the shell. Off = the hosted Plasma applet"; key: "nativeNotifications"
                             GlassSwitch { checked: Config.nativeNotifications; onToggled: on => win.setKey("nativeNotifications", on, true) } } }

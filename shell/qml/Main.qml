@@ -20,8 +20,14 @@ QtObject {
     property bool launcherOpen: dock ? dock.launcherOpen : false
     onLauncherOpenChanged: if (dock && dock.launcherOpen !== launcherOpen) dock.launcherOpen = launcherOpen
     function closeLobes() { for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.bar) o.bar.openLobe = "" } }
-    function openDesktopMenu(screen, x, y) { const m = win("desktopMenu"); if (!m.visible) m.screen = screen; m.openAt(x, y) }
+    // the menu window is moved to another screen only when it has to be: re-assigning Window.screen on a mapped layer
+    // surface left the menu unable to show at all (2026-09-22)
+    function openDesktopMenu(screen, x, y) { const m = win("desktopMenu"); if (screen && !m.visible && m.screen !== screen && (!m.screen || m.screen.name !== screen.name)) { m.close_(); m.screen = screen; m.setupDone = false } m.openAt(x, y) }
 
+    // ---- update check: opt-in ("updateCheck": true, asked by the installer, switch in Sirca Settings > Behaviour). Once
+    // after start-up (2 min in), then every 6 h; the check itself is one small GET to GitHub, see Shell::checkForUpdate.
+    property var _upd: Timer { interval: 120000; running: Config.get("updateCheck", false) === true; repeat: true; triggeredOnStart: false
+        onTriggered: { Shell.checkForUpdate(false); interval = 6 * 3600 * 1000 } }
     // ---- Alt+Tab
     // the clipboard manager lives for the whole session (it keeps the clipboard alive), the panel only shows it
     property var clipboard: ClipboardModel {}
@@ -32,6 +38,9 @@ QtObject {
     readonly property var _lazy: ({ clipboardPanel: _cClipboardPanel, powerMenu: _cPowerMenu, welcome: _cWelcome, capture: _cCapture, settings: _cSettings, switcher: _cSwitcher, search: _cSearch, tiles: _cTiles, editScene: _cEdit, desktopMenu: _cDesktopMenu })
     function win(name) { let w = _made[name]; if (!w) { const t = Date.now(); w = _lazy[name].createObject(main); _made[name] = w; if (!w) console.warn("could not build", name, _lazy[name].errorString()); else console.log("start-up: built", name, "in", Date.now() - t, "ms") } return w }
     function closePopups() { main.closeLobes(); for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.dock) { o.dock.launcherOpen = false; o.dock.previewShown = false } } }
+    // (closePopups must NOT close the desktop menu: the menu calls it from its own opened(), so it closed itself the moment
+    // it opened: "no menu appears on right click", 2026-09-22. A press on the desktop closes it explicitly instead.)
+    function closeDesktopMenu() { const dm = _made["desktopMenu"]; if (dm && dm.visible) dm.close_() }
     property var _warm: Timer { interval: 2500; running: true; repeat: true; property var todo: ["switcher", "search", "clipboardPanel", "tiles", "powerMenu", "capture", "settings"]
         onTriggered: { interval = 200; const n = todo.shift(); if (n) main.win(n); if (todo.length === 0) stop() } }
     property var _cClipboardPanel: Component { ClipboardPanel { entries: main.clipboard; onOpened: main.closePopups() } }
@@ -107,7 +116,7 @@ QtObject {
             if (id === "welcome") { main.win("welcome").open(); return }
             if (id === "power") { main.win("powerMenu").dryRun = false; main.win("powerMenu").toggle(); return }
             if (id === "power-preview") { main.win("powerMenu").dryRun = true; main.win("powerMenu").toggle(); return }
-            if (id === "show-desktop") Shell.setShowingDesktop(!main.showingDesktop);
+            if (id === "show-desktop") main.toggleShowDesktop();
             else if (id.startsWith("dock-")) { const n = parseInt(id.substring(5)) - 1; if (main.dock.tasksModel && n < main.dock.tasksModel.count) main.dock.activateCell(n); }
         } }
 
@@ -124,8 +133,26 @@ QtObject {
     // Show Desktop (Meta+D) hides every window but leaves its geometry alone, so the overlap test alone would keep the
     // bars away from an empty desktop. KWin announces the state; nothing is covered while it is on.
     property bool showingDesktop: false
+    // Our own Show Desktop (Meta+D, the bar's desktop button): MINIMISE every window, and bring the same ones back on the
+    // next press. KWin's own "showing desktop" mode was used before; it puts plasmashell's desktop window above everything,
+    // including our wallpaper, so a right click then opened Plasma's menu.
+    property var _hiddenByUs: []
+    function toggleShowDesktop() {
+        const m = windows; if (!m) return; const R_ = TaskManager.AbstractTasksModel
+        if (_hiddenByUs.length === 0) {
+            const ids = []
+            for (let i = 0; i < m.count; ++i) { const idx = m.makeModelIndex(i); if (m.data(idx, R_.IsMinimized) || m.data(idx, R_.IsLauncher)) continue
+                const w = m.data(idx, R_.WinIdList); if (w && w.length) { ids.push(String(w[0])); m.requestToggleMinimized(idx) } }
+            _hiddenByUs = ids; showingDesktop = ids.length > 0
+        } else {
+            const want = _hiddenByUs; _hiddenByUs = []
+            for (let i = 0; i < m.count; ++i) { const idx = m.makeModelIndex(i); const w = m.data(idx, R_.WinIdList)
+                if (w && w.length && want.indexOf(String(w[0])) >= 0 && m.data(idx, R_.IsMinimized)) m.requestToggleMinimized(idx) }
+            showingDesktop = false
+        }
+    }
     property var _sd: Connections { target: Shell
-        function onDbusSignal(iface, member, args) { if (iface === "org.kde.KWin" && member === "showingDesktopChanged") { if (main.dbg) console.log("showingDesktopChanged", args[0]); main.showingDesktop = !!args[0] } } }
+        function onDbusSignal(iface, member, args) { if (iface === "org.kde.KWin" && member === "showingDesktopChanged") { if (main.dbg) console.log("showingDesktopChanged", args[0]); if (!!args[0]) main.showingDesktop = true; else if (main._hiddenByUs.length === 0) main.showingDesktop = false } } }
     Component.onCompleted: {
         Shell.dbusListen("org.kde.KWin", "/KWin", "org.kde.KWin", "showingDesktopChanged");
         main.showingDesktop = !!Shell.dbusCall("org.kde.KWin", "/KWin", "org.freedesktop.DBus.Properties", "Get", ["org.kde.KWin", "showingDesktop"]);

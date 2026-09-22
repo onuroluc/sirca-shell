@@ -95,6 +95,8 @@ public:
     // bumps whenever config.json changes on disk (from the settings window, an editor, anything): Config.qml re-reads, so
     // every design token is live
     // is Plasma's desktop shell on the bus? (our wallpaper layer shows by itself only when it is not)
+    Q_PROPERTY(QString buildCommit READ buildCommit CONSTANT)     // the git commit this binary was built from (update check)
+    QString buildCommit() const;
     Q_PROPERTY(bool plasmaRunning READ plasmaRunning NOTIFY plasmaRunningChanged)
     bool plasmaRunning() const { return m_plasmaRunning; }
     // "withoutPlasmashell": true in config.json (set by sirca-shell-switch): the shell serves org.kde.osdService itself
@@ -122,6 +124,14 @@ public Q_SLOTS:
     Q_SCRIPTABLE void recordRegion(int x, int y, int w, int h) { Q_EMIT recordRegionRequested(x, y, w, h); }   // scripted start (tests)
     Q_SCRIPTABLE void grabRegion(int x, int y, int w, int h) { Q_EMIT grabRegionRequested(x, y, w, h); }   // scripted screenshot of a rectangle, no overlay (saved + copied)
     Q_SCRIPTABLE void openThemePicker() { Q_EMIT shortcutActivated(QStringLiteral("theme-picker")); }   // quick settings with the colour popover open
+    Q_INVOKABLE void raiseWallpaper();                             // a KWin script that keeps the shell's wallpaper above plasmashell's desktop (same layer; a desktop click raises Plasma's)
+    // ---- update check (opt-in: config "updateCheck": true). Asks GitHub for the main branch's head once a day and, when it
+    // differs from the commit this build came from, shows a notification with an "Update now" button that runs update.sh
+    // from the installed folder (~/.local/state/<shell>/root.txt, written by install.sh) in a terminal.
+    Q_INVOKABLE void checkForUpdate(bool announceUpToDate = false);
+    Q_INVOKABLE void runUpdate();
+    Q_SCRIPTABLE void checkUpdate() { checkForUpdate(true); }
+    Q_SCRIPTABLE void remapWallpaper() { Q_EMIT remapWallpaperRequested(); }                  // put the shell's wallpaper back above plasmashell's desktop
     Q_SCRIPTABLE void desktopMenu(int x, int y) { Q_EMIT desktopMenuRequested(x, y); }     // the desktop's right-click menu at a point (tests, scripts)
     Q_SCRIPTABLE void toggleEditMode() { Q_EMIT shortcutActivated(QStringLiteral("edit")); }
     Q_SCRIPTABLE void screenshot() { Q_EMIT shortcutActivated(QStringLiteral("screenshot")); }
@@ -144,6 +154,8 @@ Q_SIGNALS:
     void recordRegionRequested(int x, int y, int w, int h);
     void grabRegionRequested(int x, int y, int w, int h);
     void desktopMenuRequested(int x, int y);
+    void remapWallpaperRequested();
+    void updateAvailable(const QString &commit);
     void switcherRequested(bool reverse);
     void shortcutActivated(const QString &id);   // one of the shell's own global shortcuts fired (see kShortcuts in shell.cpp)      // Alt+Tab / Alt+Shift+Tab (global shortcuts owned with --own-launcher-key)
 private Q_SLOTS:

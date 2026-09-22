@@ -19,7 +19,11 @@ QtObject {
     readonly property int ox: screen ? screen.virtualX : 0
     readonly property int oy: screen ? screen.virtualY : 0
 
-    property var wallpaper: Wallpaper { screen: set.screen; onPressedAnywhere: set.host.closePopups(); onMenuRequested: (x, y) => set.host.openDesktopMenu(set.screen, x, y) }
+    property var wallpaper: Wallpaper { screen: set.screen; onPressedAnywhere: { set.host.closePopups(); set.host.closeDesktopMenu() }
+        onMenuRequested: (x, y) => set.host.openDesktopMenu(set.screen, x, y) }
+    // plasmashell's desktop window can end up ABOVE the wallpaper again (whichever of the two mapped last is on top); then
+    // a right click on the desktop opens Plasma's menu. D-Bus remapWallpaper re-maps ours on top.
+    property var _remap: Connections { target: Shell; function onRemapWallpaperRequested() { if (set.wallpaper) set.wallpaper.remapNow() } }
 
     // the bar and the dock: built at once on the primary screen, on demand elsewhere
     property var bar: null
@@ -29,6 +33,7 @@ QtObject {
         quiet: set.host.fullscreenActive; busy: set.host.fullscreenActive || set.host.gameActive; showingDesktop: set.host.showingDesktop
         activeTitle: set.host.activeTitle; activeApp: set.host.activeApp; activeIcon: set.host.activeIcon
         onOpenLobeChanged: if (openLobe !== "") set.host.launcherOpen = false
+        onShowDesktopRequested: set.host.toggleShowDesktop()
         covered: { set.host.rev; return !set.host.showingDesktop && set.host.overlaps(Qt.rect(set.ox + x + sidePad, set.oy, barW, strutSize)) } } }
     readonly property var _cDock: Component { Dock { screen: set.screen; userHidden: !set.wantDock
         editing: set.host.editing; onEditRequested: set.host.setEditing(true); onLauncherOpenChanged: if (launcherOpen) set.host.closeLobes()

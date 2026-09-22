@@ -45,6 +45,7 @@ Surface {
     restingKeyboardMode: cardCount > 0 ? "ondemand" : "none"
     onFocusLost: openLobe = ""
     property var recorder: null                // Main's Recorder: the bar shows a pill while it records
+    signal showDesktopRequested()
     property bool busy: false                  // a full-screen window or a game has focus: notifications do not pop up (Config.quietWhenBusy)
     property string openLobe: ""             // "" | "tray" | "clock" | "gear" | "media"  (the launcher lives in the dock)
     readonly property string clockFormat: (Config.clock24h ? "HH:mm" : "h:mm") + (Config.clockSeconds ? ":ss" : "") + (Config.clock24h ? "" : " AP")
@@ -268,7 +269,7 @@ Surface {
         Rectangle { visible: desk.visible && Config.barHoverPills; x: desk.x - 8; anchors.verticalCenter: parent.verticalCenter; width: desk.width + 16; height: 27; radius: 13.5; color: Config.fg(dh.hovered && !bar.showingDesktop ? 0.07 : 0); Behavior on color { ColorAnimation { duration: Config.quick } } }
         GlowIcon { id: desk; visible: barContent.live("desktop") && !bar.editing; x: barContent.at("desktop"); anchors.verticalCenter: parent.verticalCenter; size: Math.round(16 * Config.barIconScale); source: "user-desktop-symbolic"; active: bar.showingDesktop; hovered: dh.hovered
             HoverHandler { id: dh }
-            TapHandler { onTapped: Shell.setShowingDesktop(!bar.showingDesktop) } }
+            TapHandler { onTapped: bar.showDesktopRequested() } }
         // The hosted Plasma tray is loaded only while something still needs it: its icons (nativeTray off) or the
         // notification cards applet nested in it (nativeNotifications off). With both native, no hosted tray at all.
         // virtual desktops, right after the desktop button (takes no room while there is only one)
@@ -422,8 +423,8 @@ Surface {
             const c = barContent.childAt(p.x, p.y); if (!c || c === titleRow || c === dateW || c === sysW) bar.editRequested() } }
 
     // self-test: show desktop once, and unconditionally back off 4 s later (never loops)
-    Timer { id: sdTest; interval: 6000; onTriggered: { Shell.setShowingDesktop(true); sdBack.start() } }
-    Timer { id: sdBack; interval: 7000; onTriggered: Shell.setShowingDesktop(false) }
+    Timer { id: sdTest; interval: 6000; onTriggered: { bar.showDesktopRequested(); sdBack.start() } }
+    Timer { id: sdBack; interval: 7000; onTriggered: bar.showDesktopRequested() }
     Timer { id: openTrayLater; interval: 2500; onTriggered: if (tray.appletItem) tray.appletItem.glassExpand() }
 
     // ---- lobe contents: hosted applets, clipped to the lobe while it grows ------------------------

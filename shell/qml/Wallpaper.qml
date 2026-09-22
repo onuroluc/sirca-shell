@@ -26,10 +26,12 @@ Window {
     // When plasmashell (re)starts, ours is mapped again a moment later so it stays the desktop you click on.
     Connections { target: Shell; function onPlasmaRunningChanged() { if (Shell.plasmaRunning && Config.ownWallpaper === true) remap.restart() } }
     Timer { id: remap; interval: 3500; onTriggered: { wp.ready = false; remapShow.restart() } }
-    Timer { id: remapShow; interval: 120; onTriggered: wp.ready = true }
+    function remapNow() { wp.ready = false; remapShow.restart() }
+    Timer { id: remapShow; interval: 120; onTriggered: { wp.ready = true; raiseLater.restart() } }
+    Timer { id: raiseLater; interval: 600; onTriggered: Shell.raiseWallpaper() }       // see Shell::raiseWallpaper
     signal menuRequested(real x, real y)
     signal pressedAnywhere()
-    Component.onCompleted: { Shell.setupWallpaper(wp, true); a.source = toUrl(path); ready = true }
+    Component.onCompleted: { Shell.setupWallpaper(wp, true); a.source = toUrl(path); ready = true; raiseLater.restart() }
     component Pic: Image { anchors.fill: parent; fillMode: Image.PreserveAspectCrop; asynchronous: true; cache: false; smooth: true; mipmap: true
         sourceSize: Qt.size(wp.width, wp.height) }
     Pic { id: a; opacity: wp.useA ? 1 : 0; Behavior on opacity { NumberAnimation { duration: 600; easing.type: Easing.InOutQuad } } }

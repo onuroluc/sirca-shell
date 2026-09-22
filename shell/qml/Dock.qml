@@ -4,6 +4,8 @@ import QtQuick.Shapes
 import QtQuick.Effects
 import org.kde.taskmanager as TaskManager
 import org.kde.kirigami as Kirigami
+import org.kde.plasma.private.volume
+import org.kde.kitemmodels as KItemModels
 import SircaShell
 import "Glass"
 
@@ -90,7 +92,32 @@ Surface {
     readonly property real tW: Math.round(thumbW * thumbScale)
     readonly property real tH: Math.round(thumbH * thumbScale)
     readonly property real pvW: lobeMode === "menu" ? 232 : pvCount * (tW + 8) + 8
-    readonly property real pvH: lobeMode === "menu" ? menuItems.length * 34 + 16 : tH + 16
+    // ---- per-app audio: the app's playback streams (PipeWire / PulseAudio "sink inputs"), matched to the hovered task by
+    // process id, else by the binary name against the app id. One row under the thumbnails: icon (tap = mute), slider.
+    readonly property var streamModel: SinkInputModel {}
+    property var appStreams: []                   // [{ obj, name }] for the previewed task; obj is the PulseAudioQt stream (volume / muted writable)
+    readonly property bool hasAudio: appStreams.length > 0
+    readonly property int audioRowH: 40
+    function appVolumePct() { const o = appStreams.length ? appStreams[0].obj : null; return o ? Math.round(o.volume / PulseAudio.NormalVolume * 100) : 0 }
+    function appMuted() { const o = appStreams.length ? appStreams[0].obj : null; return o ? o.muted : false }
+    property int audioRev: 0                      // bumped on stream changes: the row's bindings re-read volume / muted
+    function refreshAppStreams() {
+        if (!previewShown || previewIndex < 0 || lobeMode !== "windows") { if (appStreams.length) appStreams = []; return }
+        const m = tasksModel, R_ = TaskManager.AbstractTasksModel, idx = m.makeModelIndex(previewIndex); if (!m) return
+        const pids = [], one = i => { const p = m.data(i, R_.AppPid); if (p > 0) pids.push(p) }
+        if (m.data(idx, R_.IsGroupParent)) { const n = m.rowCount(idx); for (let c = 0; c < n; ++c) one(m.makeModelIndex(previewIndex, c)) } else one(idx)
+        const appId = String(m.data(idx, R_.AppId) || "").replace(/\.desktop$/, "").toLowerCase(); const base = appId.split(".").pop()
+        const sm = streamModel, roleObj = sm.KItemModels.KRoleNames.role("PulseObject"), roleName = sm.KItemModels.KRoleNames.role("Name"), roleVirt = sm.KItemModels.KRoleNames.role("VirtualStream")
+        const out = []
+        for (let r = 0; r < sm.rowCount(); ++r) { const mi = sm.index(r, 0); if (sm.data(mi, roleVirt)) continue
+            const obj = sm.data(mi, roleObj); if (!obj || !obj.client) continue
+            const props = obj.client.properties || {}; const spid = parseInt(props["application.process.id"] || "0"); const bin = String(props["application.process.binary"] || obj.client.name || "").toLowerCase()
+            if ((spid > 0 && pids.indexOf(spid) >= 0) || (base.length > 2 && bin.indexOf(base) >= 0)) out.push({ obj: obj, name: sm.data(mi, roleName) || "" }) }
+        appStreams = out; audioRev++
+    }
+    Connections { target: dock.streamModel; function onRowsInserted() { dock.refreshAppStreams() } function onRowsRemoved() { dock.refreshAppStreams() } function onDataChanged() { dock.audioRev++ } }
+    onPreviewIndexChanged: refreshAppStreams()
+    readonly property real pvH: lobeMode === "menu" ? menuItems.length * 34 + 16 : tH + 16 + (hasAudio ? audioRowH : 0)
     property real previewGrow: previewShown ? 1 : 0
     Behavior on previewGrow { Spring {} }
     onPreviewGrowChanged: if (previewGrow < 0.002 && !previewShown) { previewIndex = -1; previewWindows = [] }
@@ -165,7 +192,7 @@ Surface {
     }
     // hovering a thumbnail shows that window (KWin's highlight-window effect fades the others out)
     function peek(uuid) { Shell.dbusSendTyped("org.kde.KWin.HighlightWindow", "/org/kde/KWin/HighlightWindow", "org.kde.KWin.HighlightWindow", "highlightWindows", "S", [uuid ? [uuid] : []]) }
-    onPreviewShownChanged: if (!previewShown) peek("")
+    onPreviewShownChanged: { if (!previewShown) peek(""); refreshAppStreams() }
     function refreshPreview() { if (previewShown && previewIndex >= 0 && lobeMode === "windows") openPreview(previewIndex) }
     // right-click: the same lobe, holding actions instead of thumbnails
     function openMenu(row) {
@@ -451,7 +478,24 @@ Surface {
                     function idx() { return modelData.child >= 0 ? dock.tasksModel.makeModelIndex(dock.previewIndex, modelData.child) : dock.tasksModel.makeModelIndex(dock.previewIndex) }
                     onPeek: on => dock.peek(on ? modelData.uuid : "")
                     onActivate: { dock.tasksModel.requestActivate(idx()); dock.previewShown = false }
-                    onClose: dock.tasksModel.requestClose(idx()) } } } }
+                    onClose: dock.tasksModel.requestClose(idx()) } } }
+        // the app's volume (see refreshAppStreams). Every stream of the app moves together: one slider.
+        Item { id: audioRow; visible: dock.lobeMode === "windows" && dock.hasAudio; x: 8; y: 8 + dock.tH + 4; width: dock.pvW - 16; height: dock.audioRowH
+            readonly property int pct: { dock.audioRev; return dock.appVolumePct() }
+            readonly property bool muted: { dock.audioRev; return dock.appMuted() }
+            Rectangle { x: 0; y: 0; width: parent.width; height: 1; color: Config.fg(0.08) }
+            Rectangle { id: ab; x: 6; anchors.verticalCenter: parent.verticalCenter; width: 28; height: 28; radius: 14; color: Config.fg(abh.hovered ? 0.12 : 0.06)
+                Behavior on color { ColorAnimation { duration: Config.quick } }
+                Kirigami.Icon { anchors.centerIn: parent; width: 15; height: 15; isMask: true; color: Config.ink
+                    source: audioRow.muted || audioRow.pct === 0 ? "audio-volume-muted-symbolic" : audioRow.pct < 34 ? "audio-volume-low-symbolic" : audioRow.pct < 67 ? "audio-volume-medium-symbolic" : "audio-volume-high-symbolic" }
+                HoverHandler { id: abh; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: { const mu = !audioRow.muted; for (const st of dock.appStreams) st.obj.muted = mu; dock.audioRev++ } } }
+            GlassSlider { anchors.left: ab.right; anchors.leftMargin: 10; anchors.right: apct.left; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
+                from: 0; to: 100; step: 1; value: audioRow.pct; opacity: audioRow.muted ? 0.45 : 1     // muted: the level is kept but greyed, so "100 % and silent" reads as what it is
+                onMoved: v => { const vol = Math.round(v) * PulseAudio.NormalVolume / 100; for (const st of dock.appStreams) { st.obj.volume = vol; if (st.obj.muted && v > 0) st.obj.muted = false } dock.audioRev++ }
+                onCommitted: v => { const vol = Math.round(v) * PulseAudio.NormalVolume / 100; for (const st of dock.appStreams) st.obj.volume = vol; dock.audioRev++ } }
+            Text { id: apct; anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; width: 44; horizontalAlignment: Text.AlignRight
+                text: audioRow.muted ? "muted" : audioRow.pct + "%"; color: Config.inkDim; font.pixelSize: 12; font.features: { "tnum": 1 } } } }
     Shortcut { sequence: "Escape"; onActivated: { dock.launcherOpen = false; dock.previewShown = false } }
     function argAfter(flag) { const a = Qt.application.arguments; const i = a.indexOf(flag); return i >= 0 && i + 1 < a.length ? parseInt(a[i + 1]) : -1 }
     Timer { running: dock.argAfter("--preview") >= 0; interval: 4000; onTriggered: dock.openPreview(dock.argAfter("--preview")) }      // capture/self-test hooks

@@ -22,6 +22,10 @@
 #include <QProcess>
 #include <QFile>
 #include <QGuiApplication>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QDir>
 #include <QScreen>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -577,6 +581,7 @@ void Shell::onNotificationAction(uint id, const QString &)
 {
     const QString file = m_notifyPaths.take(id);
     if (file.isEmpty()) return;
+    if (file == QLatin1String("<update>")) { runUpdate(); return; }
     // Dolphin directly, not org.freedesktop.FileManager1: Nautilus, Nemo and Dolphin all register that name here and
     // D-Bus activation would pick whichever it likes. --select opens the folder with the file highlighted.
     if (!QProcess::startDetached(QStringLiteral("dolphin"), {QStringLiteral("--select"), file}))
@@ -673,4 +678,95 @@ QString Shell::primaryScreenName() const
     if (!cfg.isEmpty()) { for (QScreen *s : QGuiApplication::screens()) if (s->name() == cfg) return cfg; }
     QScreen *p = QGuiApplication::primaryScreen();
     return p ? p->name() : QString();
+}
+
+// plasmashell's desktop window and our wallpaper share KWin's desktop layer, and a freshly mapped layer-shell surface does
+// NOT land on top of it (measured 2026-09-22: after every shell restart plasmashell's desktop was above the wallpaper, so a
+// right click on the desktop opened Plasma's menu). workspace.raiseWindow from a KWin script does put ours on top.
+void Shell::raiseWallpaper()
+{
+    // A persistent KWin script: whenever a window is activated or added and plasmashell's desktop window has come out above
+    // our wallpaper (a click on the desktop activates and raises it), raise ours again. Loaded once; unloaded on the next start.
+    const QString path = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + QStringLiteral("/sirca-shell-raise-wallpaper.js");
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+    f.write("const cls = \"" + QCoreApplication::applicationName().toUtf8() + "\";\n"
+            "function fix() { const st = workspace.stackingOrder; let ours = null, oi = -1, theirs = -1;\n"
+            "  for (let i = 0; i < st.length; i++) { const w = st[i]; if (w.resourceClass == cls && w.layer == 0 && !w.desktopWindow && w.frameGeometry.width >= 64) { ours = w; oi = i; } else if (w.desktopWindow) theirs = Math.max(theirs, i); }\n"
+            "  if (ours && theirs > oi) workspace.raiseWindow(ours); }\n"
+            "workspace.windowActivated.connect(function () { fix(); }); workspace.windowAdded.connect(function () { fix(); }); fix();\n");   // (no stackingOrderChanged in KWin scripting; a desktop click ACTIVATES Plasma's desktop window, which is when it comes up)
+    f.close();
+    const QString name = QStringLiteral("sirca-shell-raise-wallpaper");
+    QDBusInterface scripting(QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"), QStringLiteral("org.kde.kwin.Scripting"));
+    scripting.call(QStringLiteral("unloadScript"), name);
+    const QDBusReply<int> id = scripting.call(QStringLiteral("loadScript"), path, name);
+    if (!id.isValid() || id.value() < 0) return;
+    QDBusInterface script(QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting/Script") + QString::number(id.value()), QStringLiteral("org.kde.kwin.Script"));
+    script.call(QStringLiteral("run"));
+}
+
+// ---- update check ---------------------------------------------------------------------------------------------------
+QString Shell::buildCommit() const { return QStringLiteral(GLASS_BUILD_COMMIT); }
+
+static QString installedRoot()
+{
+    const QString state = QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation) + QLatin1Char('/') + QCoreApplication::applicationName() + QStringLiteral("/root.txt");
+    QFile f(state);
+    if (f.open(QIODevice::ReadOnly)) { const QString p = QString::fromUtf8(f.readAll()).trimmed(); if (QDir(p).exists()) return p; }
+    return QString();
+}
+
+void Shell::checkForUpdate(bool announceUpToDate)
+{
+    const QVariantMap cfg = loadConfig();
+    const QString repo = cfg.value(QStringLiteral("updateRepo"), QStringLiteral("onuroluc/sirca-shell")).toString();
+    const QString branch = cfg.value(QStringLiteral("updateBranch"), QStringLiteral("main")).toString();
+    if (buildCommit().isEmpty()) { qInfo("sirca-shell: update check: this build carries no commit id"); return; }
+    static QNetworkAccessManager *nam = nullptr;
+    if (!nam) nam = new QNetworkAccessManager(this);
+    QNetworkRequest req(QUrl(QStringLiteral("https://api.github.com/repos/%1/commits/%2").arg(repo, branch)));
+    req.setRawHeader("Accept", "application/vnd.github.sha");            // the reply body is the bare sha
+    req.setRawHeader("User-Agent", QCoreApplication::applicationName().toUtf8());
+    req.setTransferTimeout(15000);
+    QNetworkReply *r = nam->get(req);
+    connect(r, &QNetworkReply::finished, this, [this, r, announceUpToDate] {
+        r->deleteLater();
+        if (r->error() != QNetworkReply::NoError) { qInfo("sirca-shell: update check failed: %s", qPrintable(r->errorString())); return; }
+        const QString remote = QString::fromUtf8(r->readAll()).trimmed();
+        if (remote.size() < 7) return;
+        qInfo("sirca-shell: update check: this build %s, repository %s", qPrintable(buildCommit().left(7)), qPrintable(remote.left(7)));
+        if (remote.startsWith(buildCommit()) || buildCommit().startsWith(remote)) {
+            if (announceUpToDate) notify(QStringLiteral("Up to date"), QStringLiteral("This is the newest version (%1).").arg(buildCommit().left(7)), QString());
+            return;
+        }
+        Q_EMIT updateAvailable(remote);
+        // one notification with a button; its action id "default" / "update" comes back through onNotificationAction
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        const QString svc = QStringLiteral("org.freedesktop.Notifications"), path = QStringLiteral("/org/freedesktop/Notifications");
+        if (!m_notifyListening) { m_notifyListening = true;
+            bus.connect(svc, path, svc, QStringLiteral("ActionInvoked"), this, SLOT(onNotificationAction(uint, QString)));
+            bus.connect(svc, path, svc, QStringLiteral("NotificationClosed"), this, SLOT(onNotificationClosed(uint, uint))); }
+        QDBusMessage m = QDBusMessage::createMethodCall(svc, path, svc, QStringLiteral("Notify"));
+        QVariantMap hints{{QStringLiteral("desktop-entry"), QStringLiteral("sirca-shell")}, {QStringLiteral("resident"), true}};
+        const QStringList actions{QStringLiteral("default"), QStringLiteral("Update now"), QStringLiteral("update"), QStringLiteral("Update now")};
+        m.setArguments({QStringLiteral("Sirca Shell"), uint(0), QStringLiteral("system-software-update"), QStringLiteral("A new version is available"),
+                        QStringLiteral("You have %1, the repository is at %2. Update now pulls it and re-runs the installer in a terminal.").arg(buildCommit().left(7), remote.left(7)), actions, hints, 0});
+        auto *w = new QDBusPendingCallWatcher(bus.asyncCall(m), this);
+        connect(w, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) { w->deleteLater(); const QDBusPendingReply<uint> reply = *w; if (!reply.isError()) m_notifyPaths.insert(reply.value(), QStringLiteral("<update>")); });
+    });
+}
+
+void Shell::runUpdate()
+{
+    const QString root = installedRoot();
+    if (root.isEmpty()) { notify(QStringLiteral("Cannot update"), QStringLiteral("The installed folder is not known (run install.sh once from the repository)."), QString()); return; }
+    const QString script = root + QStringLiteral("/update.sh");
+    if (!QFile::exists(script)) { notify(QStringLiteral("Cannot update"), QStringLiteral("%1 is missing.").arg(script), QString()); return; }
+    const QString term = defaultTerminal();
+    // the terminal shows the pull and the installer (it may ask for sudo); the shell is restarted by the installer
+    if (term.contains(QLatin1String("ghostty")) || term.contains(QLatin1String("kitty")) || term.contains(QLatin1String("alacritty")) || term.contains(QLatin1String("foot")))
+        QProcess::startDetached(term, {QStringLiteral("-e"), QStringLiteral("bash"), script});
+    else if (term.contains(QLatin1String("konsole")) || term.contains(QLatin1String("gnome-terminal")) || term.contains(QLatin1String("xterm")))
+        QProcess::startDetached(term, {QStringLiteral("-e"), QStringLiteral("bash"), script});
+    else QProcess::startDetached(QStringLiteral("xterm"), {QStringLiteral("-e"), QStringLiteral("bash"), script});
 }

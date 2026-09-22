@@ -9,8 +9,8 @@ set -uo pipefail
 qdbus6() { if type -P qdbus6 >/dev/null 2>&1; then command qdbus6 "$@"; else qdbus-qt6 "$@"; fi; }
 export -f qdbus6
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-DRY=0; YES=0; PRESET=""
-while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1 ;; --yes|-y) YES=1 ;; --preset) PRESET="${2:-}"; shift ;; -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; *) echo "unknown option: $1"; exit 2 ;; esac; shift; done
+DRY=0; YES=0; PRESET=""; PARTS=""
+while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1 ;; --yes|-y) YES=1 ;; --preset) PRESET="${2:-}"; shift ;; --parts) PARTS="${2:-}"; shift ;; -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; *) echo "unknown option: $1"; exit 2 ;; esac; shift; done
 STATE="$HOME/.local/state/sirca-shell"; mkdir -p "$STATE"; LOG="$STATE/install-$(date +%Y%m%d-%H%M%S).log"
 if [ -t 1 ]; then B=$'\e[1m'; D=$'\e[2m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; C=$'\e[36m'; N=$'\e[0m'; else B=""; D=""; R=""; G=""; Y=""; C=""; N=""; fi
 say()  { printf '%s\n' "$*"; }
@@ -111,7 +111,10 @@ cat <<TXT
 TXT
 declare -A ON=([shell]=1 [effect]=0 [look]=0 [mode]=0 [lock]=0 [qt]=0 [setup]=0)
 preset() { case "$1" in shell|1) ;; look|2) ON[effect]=1; ON[look]=1; ON[mode]=1; ON[lock]=1 ;; full|3) ON[effect]=1; ON[look]=1; ON[mode]=1; ON[lock]=1; ON[qt]=1; ON[setup]=1 ;; *) return 1 ;; esac; }
-if [ -n "$PRESET" ]; then preset "$PRESET" || { echo "unknown preset: $PRESET"; exit 2; }
+# --parts "shell effect look ..." (update.sh): switch on exactly those
+parts() { for k in $1; do ON[$k]=1; done; }
+if [ -n "${PARTS:-}" ]; then parts "$PARTS"
+elif [ -n "$PRESET" ]; then preset "$PRESET" || { echo "unknown preset: $PRESET"; exit 2; }
 else
     a=""; [ $YES = 1 ] && a=1 || { read -r -p "Your choice [1-4, default 1]: " a </dev/tty || a=1; }; a="${a:-1}"
     if [ "$a" = 4 ]; then
@@ -139,8 +142,11 @@ say "         screenshots, tile picker, window switcher, power menu, edit mode, 
 say "  ${Y}Not yet, for anyone:${N} more than one screen; X11; other compositors; a vertical dock."
 say "  ${D}Optional extras that stay manual: Spotify theme + mini player, Firefox accent, Ghostty styling (see desktop/README.md).${N}"
 NEED_SUDO=$(( ON[effect] + ON[qt] ))
+[ $DRY = 1 ] || printf '%s\n' "$ROOT" > "$STATE/root.txt"                                           # the shell's "Update now" and update.sh read this
+[ $DRY = 1 ] || { for k in shell effect look mode lock qt setup; do [ "${ON[$k]:-0}" = 1 ] && printf '%s ' "$k"; done; echo; } > "$STATE/parts.txt"   # what was chosen, re-used by update.sh
 [ $NEED_SUDO -gt 0 ] && say "  ${B}sudo will be asked for${N} by: $([ ${ON[effect]} = 1 ] && printf 'the KWin effect  ')$([ ${ON[qt]} = 1 ] && printf 'the Qt style and decoration')"
-if ! ask "Install now?" y; then say "Nothing was changed."; exit 0; fi
+if ! UPDATE_CHECK=0; [ $YES = 1 ] || { ask "Let the shell check GitHub once a day for a new version, and offer to update? (one small request to api.github.com; nothing else is sent)" n && UPDATE_CHECK=1; }
+ask "Install now?" y; then say "Nothing was changed."; exit 0; fi
 
 # ------------------------------------------------------------------------------------------------ 6. install
 head_ "5. Installing   ${D}(log: $LOG)${N}"
@@ -176,6 +182,14 @@ i_qt() {
     say "  ${B}sudo:${N} installing the style and decoration plugins (the stock Darkly plugin is kept as darkly6.so.orig-glass)"
     run "install the Qt style and decoration (sudo)" sudo "$ROOT/desktop/tools/install_qt.sh" || return 1
     run "use the glass window decoration" "$ROOT/desktop/tools/use_decoration.sh" glass; }
+i_updatecheck() { [ "${UPDATE_CHECK:-0}" = 1 ] || return 0; run "update check on (config updateCheck)" python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.config/sirca-shell/config.json")
+try: c = json.load(open(p))
+except Exception: c = {}
+c["updateCheck"] = True; os.makedirs(os.path.dirname(p), exist_ok=True); tmp = p + ".tmp"; json.dump(c, open(tmp, "w"), indent=4); os.replace(tmp, p)
+PY
+}
 i_setup() { run "the author's bar and dock layout (your config is backed up first)" "$HOME/.local/bin/sirca-shell-setup" import "$ROOT/setups/author.json"; }
 [ ${ON[shell]}  = 1 ] && step i_shell
 [ ${ON[effect]} = 1 ] && step i_effect
@@ -184,6 +198,7 @@ i_setup() { run "the author's bar and dock layout (your config is backed up firs
 [ ${ON[lock]}   = 1 ] && step i_lock
 [ ${ON[qt]}     = 1 ] && step i_qt
 [ ${ON[setup]}  = 1 ] && step i_setup
+[ ${ON[shell]}  = 1 ] && step i_updatecheck
 [ $DRY = 1 ] || printf '%s\n' "$(for k in "${!ON[@]}"; do echo "$k=${ON[$k]}"; done)" > "$STATE/installed-components"
 
 # ------------------------------------------------------------------------------------------------ 7. what now
