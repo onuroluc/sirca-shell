@@ -25,7 +25,9 @@ out the hard way.
   revert. The Qt style and window decoration (optional, sudo) replace the Darkly style plugin if you have Darkly. The
   original is kept next to it as `darkly6.so.orig-glass`.
 - Only Plasma on Wayland. No X11, no Hyprland, Sway or GNOME.
-- One screen. With several screens the bar and dock show up on the primary one only, for now.
+- Several screens: every screen gets the wallpaper; the bar and the dock are on the primary screen unless you put them
+  elsewhere in edit mode (Screens). Popups and shortcuts open on the primary. I have only tested this with two virtual
+  screens, never on real hardware, so tell me what you see.
 - I have never run it on AMD or Intel graphics. It should work. If it does not, I want to hear about it.
 - No telemetry. It sends nothing anywhere.
 - There is no warranty (GPL-3.0-or-later).
@@ -107,7 +109,7 @@ Keep the cloned folder if you install the light/dark switch. `glass-mode` and th
 | Older Plasma 6 | maybe. The shell might miss things, and the KWin effect is picky about versions |
 | X11, Hyprland, Sway, GNOME | no |
 | One screen | yes |
-| Several screens | not yet, primary screen only |
+| Several screens | wallpaper on all, bar and dock per screen from edit mode. Tested with two virtual screens only |
 | Without the KWin effect | works, but flat: see-through surfaces with no blur and no lit edge |
 | NVIDIA | yes, developed on it |
 | AMD, Intel | untested. Please tell me how it goes |

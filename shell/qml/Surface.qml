@@ -79,6 +79,14 @@ Window {
         return [edgeStrip.x, edge === "top" ? 0 : surface.height - h, edgeStrip.width, h];
     }
     property int strutSize: 0
+    // multi-screen: the screen this surface lives on is Window.screen (set by ScreenSet before the surface shows); its
+    // origin in the virtual desktop, for the window-overlap test (task geometry is in desktop coordinates)
+    readonly property int screenX: screen ? screen.virtualX : 0
+    readonly property int screenY: screen ? screen.virtualY : 0
+    // "no bar on this screen" (edit mode > Screens): unmapped, nothing else changes
+    property bool userHidden: false
+    onUserHiddenChanged: if (hasBeenSetUp) visible = !userHidden
+    property bool hasBeenSetUp: false
     color: "transparent"
     // Wayland never tells a client where its surface is, and layer-shell ignores these — but hosted applets place their
     // tooltips, menus and notification popups relative to the window's position, so keep it truthful.
@@ -118,7 +126,8 @@ Window {
     Component.onCompleted: {
         strutSize = strut;
         Shell.setupLayer(surface, edge, dodge ? 0 : strut, "dock");
-        visible = true;
+        hasBeenSetUp = true;
+        visible = !userHidden;
         applyShape();   // synchronously after show(): rides on the surface's first commit, which the effect samples
     }
 }

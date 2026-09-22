@@ -4,10 +4,23 @@ import SircaShell
 
 QtObject {
     id: main
-    property var topBar: TopBar { recorder: main.recorder; editing: main.editing; onEditRequested: main.setEditing(true); quiet: main.dock.fullscreenActive; busy: main.dock.fullscreenActive || main.dock.gameActive; showingDesktop: main.showingDesktop; activeTitle: main.activeTitle; activeApp: main.activeApp; activeIcon: main.activeIcon; onOpenLobeChanged: if (openLobe !== "") main.dock.launcherOpen = false
-        covered: { main.rev; return !main.showingDesktop && main.overlaps(Qt.rect(x + sidePad, 0, barW, strutSize)) } }
-    property var dock: Dock { editing: main.editing; onEditRequested: main.setEditing(true); onLauncherOpenChanged: if (launcherOpen) main.topBar.openLobe = ""
-        covered: { main.rev; return !main.showingDesktop && main.overlaps(Qt.rect(x + (width - dockW) / 2, y + height - strutSize, dockW, strutSize)) } }
+    // ---- one set (wallpaper + bar + dock) per screen; main.topBar / main.dock are the PRIMARY screen's, which the rest of
+    // the shell (shortcuts, D-Bus, popups) talks to. See ScreenSet.qml.
+    // (Qt.application.screens is a plain list: an Instantiator gives its delegates an index only, so the screen is looked up)
+    property var sets: Instantiator { model: Qt.application.screens.length; delegate: ScreenSet { required property int index; screen: Qt.application.screens[index]; host: main }
+        onObjectAdded: (i, o) => main.rescan(); onObjectRemoved: (i, o) => main.rescan() }
+    property var primarySet: null
+    function rescan() { let p = null; for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.primary) { p = o; break } } if (!p && sets.count) p = sets.objectAt(0); primarySet = p }
+    property var _ps: Connections { target: Shell; function onPrimaryScreenChanged() { main.rescan() } }
+    readonly property var topBar: primarySet ? primarySet.bar : null
+    readonly property var dock: primarySet ? primarySet.dock : null
+    // what every bar and dock reads (the task model is global; the flags used to live on the one dock)
+    readonly property bool fullscreenActive: dock ? dock.fullscreenActive : false
+    readonly property bool gameActive: dock ? dock.gameActive : false
+    property bool launcherOpen: dock ? dock.launcherOpen : false
+    onLauncherOpenChanged: if (dock && dock.launcherOpen !== launcherOpen) dock.launcherOpen = launcherOpen
+    function closeLobes() { for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.bar) o.bar.openLobe = "" } }
+    function openDesktopMenu(screen, x, y) { const m = win("desktopMenu"); if (!m.visible) m.screen = screen; m.openAt(x, y) }
 
     // ---- Alt+Tab
     // the clipboard manager lives for the whole session (it keeps the clipboard alive), the panel only shows it
@@ -18,7 +31,7 @@ QtObject {
     property var _made: ({})
     readonly property var _lazy: ({ clipboardPanel: _cClipboardPanel, powerMenu: _cPowerMenu, welcome: _cWelcome, capture: _cCapture, settings: _cSettings, switcher: _cSwitcher, search: _cSearch, tiles: _cTiles, editScene: _cEdit, desktopMenu: _cDesktopMenu })
     function win(name) { let w = _made[name]; if (!w) { const t = Date.now(); w = _lazy[name].createObject(main); _made[name] = w; if (!w) console.warn("could not build", name, _lazy[name].errorString()); else console.log("start-up: built", name, "in", Date.now() - t, "ms") } return w }
-    function closePopups() { main.topBar.openLobe = ""; main.dock.launcherOpen = false; main.dock.previewShown = false }
+    function closePopups() { main.closeLobes(); for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.dock) { o.dock.launcherOpen = false; o.dock.previewShown = false } } }
     property var _warm: Timer { interval: 2500; running: true; repeat: true; property var todo: ["switcher", "search", "clipboardPanel", "tiles", "powerMenu", "capture", "settings"]
         onTriggered: { interval = 200; const n = todo.shift(); if (n) main.win(n); if (todo.length === 0) stop() } }
     property var _cClipboardPanel: Component { ClipboardPanel { entries: main.clipboard; onOpened: main.closePopups() } }
@@ -33,7 +46,6 @@ QtObject {
         for (let i = 0; i < m.count; ++i) { const idx = m.makeModelIndex(i); if (m.data(idx, R_.IsMinimized)) continue
             const g = m.data(idx, R_.Geometry); if (g && g.width > 0) out.push({ x: g.x, y: g.y, width: g.width, height: g.height, z: m.data(idx, R_.StackingOrder) }) }
         out.sort((a, b) => b.z - a.z); return out }
-    property var wallpaper: Wallpaper { onPressedAnywhere: main.closePopups(); onMenuRequested: (x, y) => main.win("desktopMenu").openAt(x, y) }
     property var _dmr: Connections { target: Shell; function onDesktopMenuRequested(x, y) { if (x < 0) main.win("desktopMenu").close_(); else main.win("desktopMenu").openAt(x, y) } }   // negative = close
     property var _cDesktopMenu: Component { DesktopMenu { onOpened: main.closePopups(); onAction: id => main.desktopAction(id) } }
     function desktopAction(id) {
@@ -69,8 +81,9 @@ QtObject {
     property bool editing: false
     function setEditing(on) { if (on === editing) return; if (on) closePopups(); editing = on; const s = win("editScene"); if (on) s.open(); else s.close_() }
     property var _cEdit: Component { EditScene {
-        barHole: Qt.rect(main.topBar.x + main.topBar.barRect.x - 30, 0, main.topBar.barRect.width + 60, main.topBar.barRect.y + main.topBar.barRect.height + 10)
-        dockHole: Qt.rect(main.dock.x + main.dock.barRect.x - 12, main.dock.y + main.dock.barRect.y - 12, main.dock.barRect.width + 24, main.dock.barRect.height + 24)
+        screen: main.primarySet ? main.primarySet.screen : null
+        barHole: main.topBar ? Qt.rect(main.topBar.x + main.topBar.barRect.x - 30, 0, main.topBar.barRect.width + 60, main.topBar.barRect.y + main.topBar.barRect.height + 10) : Qt.rect(0, 0, 0, 0)
+        dockHole: main.dock ? Qt.rect(main.dock.x + main.dock.barRect.x - 12, main.dock.y + main.dock.barRect.y - 12, main.dock.barRect.width + 24, main.dock.barRect.height + 24) : Qt.rect(0, 0, 0, 0)
         onDone: main.setEditing(false); onMoreSettings: { main.setEditing(false); main.win("settings").openIt() } } }
     property var _cTiles: Component { Tiles { onOpened: main.closePopups() } }
     property var _cSearch: Component { Search { onOpened: main.closePopups() } }
@@ -99,7 +112,7 @@ QtObject {
         } }
 
     // ---- click outside closes whatever is open
-    readonly property bool popupOpen: topBar.openLobe !== "" || dock.launcherOpen || (dock.previewShown && dock.lobeMode === "menu")
+    readonly property bool popupOpen: !!topBar && !!dock && (topBar.openLobe !== "" || dock.launcherOpen || (dock.previewShown && dock.lobeMode === "menu"))
     // (no click catcher any more: popups close on focus loss, see Surface.popupFocus. Catcher.qml is unused.)
     // a press on one of our surfaces closes the OTHER surface's popups (that one keeps the keyboard focus, because the
     // pressed surface does not take it, so focus loss alone would not notice)

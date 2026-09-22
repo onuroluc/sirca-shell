@@ -28,6 +28,10 @@ public:
     // type the surface as a dock, which is what the Glass effect keys its panel treatment on.
     Q_INVOKABLE void setupLayer(QQuickWindow *window, const QString &edge, int exclusiveZone, const QString &scope = QStringLiteral("dock"));
     Q_INVOKABLE void setExclusiveZone(QQuickWindow *window, int zone);
+    // multi-screen: the primary output (QGuiApplication::primaryScreen); the config key "primaryScreen" (an output name)
+    // overrides it. Screens come and go: primaryScreenChanged fires on both.
+    Q_PROPERTY(QString primaryScreenName READ primaryScreenName NOTIFY primaryScreenChanged)
+    QString primaryScreenName() const;
     // Click catcher: a transparent full-screen layer surface shown only while a popup is open. `holes` = flat [x,y,w,h,…] in
     // screen coordinates that stay click-through (our bars and the open popup); a click anywhere else lands on the catcher.
     Q_INVOKABLE void setupCatcher(QQuickWindow *window);
@@ -128,6 +132,7 @@ public Q_SLOTS:
     Q_SCRIPTABLE void toggleSearch() { Q_EMIT shortcutActivated(QStringLiteral("search")); }
     Q_SCRIPTABLE void previewSearch(const QString &query) { Q_EMIT searchPreviewRequested(query); }   // no keyboard grab, closes by itself
 Q_SIGNALS:
+    void primaryScreenChanged();
     void dbusSignal(const QString &iface, const QString &member, const QVariantList &args);
     void launcherToggleRequested();
     void lobeToggleRequested(const QString &name);

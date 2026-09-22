@@ -24,7 +24,7 @@ Window {
     function close_() { visible = false; show = 0 }
     Timer { id: regions; interval: 30; onTriggered: es.pushRegions() }
     function pushRegions() { if (!visible) return
-        const p = []; for (const it of [barStrip, dockStrip, pill]) p.push({ x: it.x, y: it.y, w: it.width, h: it.height, r: it.radius })
+        const p = []; for (const it of [barStrip, dockStrip, pill, screensStrip]) if (it.visible) p.push({ x: it.x, y: it.y, w: it.width, h: it.height, r: it.radius })
         Shell.setSceneRegions(es, p, [ { x: barHole.x, y: barHole.y, w: barHole.width, h: barHole.height }, { x: dockHole.x, y: dockHole.y, w: dockHole.width, h: dockHole.height } ]); es.requestUpdate() }
     onBarHoleChanged: regions.restart(); onDockHoleChanged: regions.restart()
 
@@ -99,6 +99,11 @@ Window {
     function text(item, v) { return item.pct ? Math.round(v * 100) + " %" : item.mult ? Number(v).toFixed(2) + "×" : Math.round(v) + (item.unit || "") }
 
     // ---- one option
+    component PillBtn: Rectangle { id: pb; property string label; property bool primary: false; signal tapped()
+        width: pbt.implicitWidth + 30; height: 32; radius: 16; anchors.verticalCenter: parent.verticalCenter
+        color: primary ? es.accent : Qt.rgba(1, 1, 1, pbh.hovered ? 0.16 : 0.09); Behavior on color { ColorAnimation { duration: Config.quick } }
+        Text { id: pbt; anchors.centerIn: parent; text: pb.label; color: "white"; font.pixelSize: 12; font.weight: pb.primary ? Font.DemiBold : Font.Normal }
+        HoverHandler { id: pbh; cursorShape: Qt.PointingHandCursor } TapHandler { onTapped: pb.tapped() } }
     component Option: Item { id: op; required property var modelData
         readonly property var cur: Config[modelData.k]
         visible: es.met(modelData.when); width: visible ? (modelData.t === "choice" ? ch.implicitWidth : 188) : 0; height: 50
@@ -156,15 +161,38 @@ Window {
     Strip { id: dockStrip; anchors.horizontalCenter: parent.horizontalCenter; y: es.dockHole.y - height - 26 + (1 - es.show) * 14
         title: "Dock"; hint: "Drag icons to reorder  ·  × unpins  ·  right-click an app to pin it"; tabs: es.dockTabs }
 
-    Rectangle { id: pill; anchors.horizontalCenter: parent.horizontalCenter; y: Math.round((barStrip.y + barStrip.height + dockStrip.y - height) / 2); radius: height / 2
+    // ---- Screens: which screen shows what. Only with more than one screen. The primary screen (Plasma's, or the one made
+    // primary here) has the bar and the dock unless switched off; the others start with the wallpaper only.
+    Rectangle { id: screensStrip; visible: Qt.application.screens.length > 1; anchors.horizontalCenter: parent.horizontalCenter
+        y: pill.y - height - 14; radius: 26                                  // just above the pill, between the two strips
+        width: Math.min(es.width - 80, 1180); height: sbody.y + sbody.height + 18
+        color: Qt.rgba(0.07, 0.08, 0.11, 0.55); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.20); opacity: es.show
+        onHeightChanged: regions.restart(); onYChanged: regions.restart()
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+        Text { x: 26; y: 17; text: "Screens"; color: "white"; font.pixelSize: 15; font.weight: Font.DemiBold }
+        Text { x: 26; y: 39; text: "Each screen shows its wallpaper. Choose which ones also get the bar and the dock, and which one is the primary (popups and shortcuts open there)."; color: Qt.rgba(1, 1, 1, 0.55); font.pixelSize: 11 }
+        Column { id: sbody; x: 26; y: 66; width: parent.width - 52; spacing: 8
+            Repeater { model: Qt.application.screens
+                Row { id: sr; required property var modelData; spacing: 18; height: 32
+                    readonly property string sname: modelData.name
+                    readonly property bool isPrimary: sname === Shell.primaryScreenName
+                    readonly property var ch: (Config.get("screens", {}) || {})[sname] || {}
+                    function setChoice(key, on) { const all = Object.assign({}, Config.get("screens", {}) || {}); const mine = Object.assign({}, all[sname] || {}); mine[key] = on; all[sname] = mine; Shell.saveConfigKey("screens", all) }
+                    Text { width: 300; anchors.verticalCenter: parent.verticalCenter; elide: Text.ElideRight; color: "white"; font.pixelSize: 13
+                        text: sr.sname + "  ·  " + sr.modelData.width + " × " + sr.modelData.height + (sr.isPrimary ? "  ·  primary" : "") }
+                    Row { spacing: 8; anchors.verticalCenter: parent.verticalCenter
+                        Text { text: "Bar"; color: Qt.rgba(1, 1, 1, 0.75); font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                        GlassSwitch { checked: sr.ch.bar !== undefined ? !!sr.ch.bar : sr.isPrimary; onToggled: on => sr.setChoice("bar", on) } }
+                    Row { spacing: 8; anchors.verticalCenter: parent.verticalCenter
+                        Text { text: "Dock"; color: Qt.rgba(1, 1, 1, 0.75); font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                        GlassSwitch { checked: sr.ch.dock !== undefined ? !!sr.ch.dock : sr.isPrimary; onToggled: on => sr.setChoice("dock", on) } }
+                    PillBtn { visible: !sr.isPrimary; label: "Make primary"; onTapped: Shell.saveConfigKey("primaryScreen", sr.sname) } } } } }
+
+    Rectangle { id: pill; anchors.horizontalCenter: parent.horizontalCenter; radius: height / 2
+        y: Math.round((barStrip.y + barStrip.height + dockStrip.y - height) / 2) + (screensStrip.visible ? Math.round((screensStrip.height + 14) / 2) : 0)
         width: pr.implicitWidth + 44; height: 56; color: Qt.rgba(0.07, 0.08, 0.11, 0.55); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.20); opacity: es.show
         onYChanged: regions.restart(); onWidthChanged: regions.restart()
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
-        component PillBtn: Rectangle { id: pb; property string label; property bool primary: false; signal tapped()
-            width: pbt.implicitWidth + 30; height: 32; radius: 16; anchors.verticalCenter: parent.verticalCenter
-            color: primary ? es.accent : Qt.rgba(1, 1, 1, pbh.hovered ? 0.16 : 0.09); Behavior on color { ColorAnimation { duration: Config.quick } }
-            Text { id: pbt; anchors.centerIn: parent; text: pb.label; color: "white"; font.pixelSize: 12; font.weight: pb.primary ? Font.DemiBold : Font.Normal }
-            HoverHandler { id: pbh; cursorShape: Qt.PointingHandCursor } TapHandler { onTapped: pb.tapped() } }
         Row { id: pr; anchors.centerIn: parent; spacing: 12
             Text { text: "Editing the desktop"; color: "white"; font.pixelSize: 14; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter; rightPadding: 8 }
             PillBtn { label: "Reset bar"; onTapped: Shell.removeConfigKeys(es.keysOf(es.barTabs, ["barLeft", "barCenter", "barRight"])) }

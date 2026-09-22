@@ -22,6 +22,7 @@
 #include <QProcess>
 #include <QFile>
 #include <QGuiApplication>
+#include <QScreen>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -134,6 +135,9 @@ Shell::Shell(QObject *parent) : QObject(parent)
     auto ctorDone = qScopeGuard([ctorStart] { qInfo("sirca-shell: start-up: Shell singleton built in %lld ms (at %lld ms)", msSinceStart() - ctorStart, ctorStart); });
     QTimer::singleShot(0, this, [this] { initFakeInput(); });
     watchConfig();
+    for (auto sig : {&QGuiApplication::screenAdded, &QGuiApplication::screenRemoved}) connect(qApp, sig, this, [this](QScreen *) { Q_EMIT primaryScreenChanged(); });
+    connect(qApp, &QGuiApplication::primaryScreenChanged, this, [this](QScreen *) { Q_EMIT primaryScreenChanged(); });
+    connect(this, &Shell::configRevisionChanged, this, &Shell::primaryScreenChanged);
     {   // follow org.kde.plasmashell coming and going
         auto bus = QDBusConnection::sessionBus();
         const QString name = QStringLiteral("org.kde.plasmashell");
@@ -203,6 +207,7 @@ void Shell::setupLayer(QQuickWindow *window, const QString &edge, int exclusiveZ
     lw->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityOnDemand);
     lw->setAnchors(edge == QLatin1String("bottom") ? LayerShellQt::Window::AnchorBottom : LayerShellQt::Window::AnchorTop);
     lw->setExclusiveZone(exclusiveZone);
+    lw->setScreen(window->screen());              // multi-screen: the QML sets Window.screen before it shows (default: the primary)
     ShellCorona::rememberStrut(edge == QLatin1String("bottom"), exclusiveZone);   // no corona is created for this
 }
 
@@ -411,6 +416,7 @@ void Shell::setupWallpaper(QQuickWindow *window, bool takesInput)
     lw->setScope(QStringLiteral("sirca-shell-wallpaper"));
     lw->setKeyboardInteractivity(W::KeyboardInteractivityNone);
     lw->setAnchors(W::Anchors(W::AnchorTop | W::AnchorBottom | W::AnchorLeft | W::AnchorRight));
+    lw->setScreen(window->screen());              // one wallpaper per screen
     lw->setExclusiveZone(-1);
     if (takesInput) window->setMask(QRegion());                       // the desktop: right click menu, a click closes popups
     else window->setMask(QRegion(0, 0, 1, 1));                        // only a picture: clicks reach what is below
@@ -659,4 +665,12 @@ void Shell::updateOsdClaim()
     const bool before = m_osd->claimed();
     if (m_withoutPlasmashell && !m_plasmaRunning) m_osd->claim(); else m_osd->release();
     if (before != m_osd->claimed()) { qInfo("sirca-shell: org.kde.osdService %s", m_osd->claimed() ? "served by the shell (no plasmashell)" : "released"); Q_EMIT plasmaRunningChanged(); }
+}
+
+QString Shell::primaryScreenName() const
+{
+    const QString cfg = loadConfig().value(QStringLiteral("primaryScreen")).toString();
+    if (!cfg.isEmpty()) { for (QScreen *s : QGuiApplication::screens()) if (s->name() == cfg) return cfg; }
+    QScreen *p = QGuiApplication::primaryScreen();
+    return p ? p->name() : QString();
 }
