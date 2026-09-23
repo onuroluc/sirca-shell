@@ -15,7 +15,7 @@ case "${1:-}" in
       [ -f "$HOME/.local/share/flatpak/overrides/global" ] && cp "$HOME/.local/share/flatpak/overrides/global" "$B/flatpak-global" || true
     fi
     # GTK 3 base theme: adw-gtk3 (libadwaita's look for GTK 3, same named colours) — bundled copy, user themes dir
-    mkdir -p "$HOME/.themes"; for t in adw-gtk3 adw-gtk3-dark; do [ -d "$HOME/.themes/$t" ] || cp -r "$ROOT/third_party/adw-gtk3/$t" "$HOME/.themes/$t"; done
+    mkdir -p "$HOME/.themes"; for t in adw-gtk3 adw-gtk3-dark; do [ -d "$HOME/.themes/$t" ] || { cp -r "$ROOT/third_party/adw-gtk3/$t" "$HOME/.themes/$t"; touch "$B/added-theme-$t"; }; done
     mkdir -p "$C/gtk-3.0" "$C/gtk-4.0"
     cp "$ROOT/build/gtk/gtk-3.0.css" "$C/gtk-3.0/gtk.css"
     cp "$ROOT/build/gtk/gtk-4.0.css" "$C/gtk-4.0/gtk.css"; cp "$ROOT/build/gtk/gtk-4.0.css" "$C/gtk-4.0/gtk-dark.css"
@@ -37,6 +37,7 @@ case "${1:-}" in
     if command -v flatpak >/dev/null; then
       if [ -f "$B/flatpak-global" ]; then cp "$B/flatpak-global" "$HOME/.local/share/flatpak/overrides/global"; else rm -f "$HOME/.local/share/flatpak/overrides/global"; fi
     fi
+    for m in "$B"/added-theme-*; do [ -e "$m" ] && rm -rf "$HOME/.themes/${m##*/added-theme-}"; done; rmdir "$HOME/.themes" 2>/dev/null || true   # (issue #6, leissa: only the themes WE added)
     rm -rf "$B"; echo "reverted (GTK theme: ${old:-unchanged})" ;;
   *) echo "usage: $0 apply|revert"; exit 2 ;;
 esac

@@ -23,10 +23,11 @@ PY
     echo "applied. Restart Qt apps to see the widget-style part. Revert: $0 revert" ;;
   revert)
     [ -d "$B" ] || { echo "no backup in $B"; exit 1; }
-    [ -f "$B/darklyrc" ] && cp "$B/darklyrc" "$HOME/.config/darklyrc"
+    if [ -f "$B/darklyrc" ]; then cp "$B/darklyrc" "$HOME/.config/darklyrc"; else rm -f "$HOME/.config/darklyrc"; fi   # (issue #6: none before = none after)
     a="$(cat "$B/accent.txt" 2>/dev/null || true)"; [ -n "$a" ] && kwriteconfig6 --file kdeglobals --group General --key AccentColor "$a"
     plasma-apply-colorscheme Glass >/dev/null 2>&1 || true; plasma-apply-colorscheme "$(cat "$B/colorscheme.txt")" >/dev/null
     qdbus6 org.kde.KWin /KWin reconfigure >/dev/null
+    rm -f "$SCHEMES/Glass.colors" "$SCHEMES/GlassLight.colors"
     rm -rf "$B"; echo "reverted to $(kreadconfig6 --file kdeglobals --group General --key ColorScheme)" ;;
   *) echo "usage: $0 apply|revert"; exit 2 ;;
 esac
