@@ -12,7 +12,18 @@ after="$(git rev-parse --short HEAD)"
 if [ "$before" = "$after" ]; then echo "already at $after, nothing to do"; read -r -p "Enter to close" _; exit 0; fi
 echo "== $before -> $after"; git --no-pager log --oneline "$before..$after" | head -30; echo
 parts="$(cat "$STATE/parts.txt" 2>/dev/null || echo shell)"
+# "setup" is the author's bar and dock layout: a first-install choice, never re-imported over your own layout on an update
+parts="$(printf '%s\n' $parts | grep -vx setup | tr '\n' ' ')"
 echo "== re-installing: $parts"
 ./install.sh --parts "$parts" --yes; rc=$?
-echo; [ $rc = 0 ] && echo "== done. If the shell did not restart by itself: sirca-shell-switch off; sirca-shell-switch on" || echo "== the installer reported problems (see above)"
+echo
+if [ $rc = 0 ]; then
+    # the running shell is the old binary: restart it (a symlinked unit was removed by "disable" in 0.6.x; put a copy back if so)
+    for u in sirca-shell.service sirca-shell-fallback.service; do [ -e "$HOME/.config/systemd/user/$u" ] || { [ -f "$HOME/.local/lib/systemd/user/$u" ] && install -m 644 "$HOME/.local/lib/systemd/user/$u" "$HOME/.config/systemd/user/$u"; }; done
+    systemctl --user daemon-reload 2>/dev/null
+    if systemctl --user is-enabled -q sirca-shell.service 2>/dev/null; then systemctl --user restart sirca-shell.service && sleep 4; fi
+    if systemctl --user is-active -q sirca-shell.service; then echo "== done: the shell restarted ($(~/.local/bin/sirca-shell --version 2>/dev/null || echo new build) is running)"
+    else echo "== done. The shell is not running; switch it on with: sirca-shell-switch on"; fi
+    case " $parts " in *" effect "*|*" qt "*) echo "== the KWin effect / window decoration were rebuilt: they take effect after you log out and back in";; esac
+else echo "== the installer reported problems (see above)"; fi
 read -r -p "Enter to close" _

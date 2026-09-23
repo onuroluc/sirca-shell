@@ -68,6 +68,9 @@ PY
     SILENT=""; for c in "$HOME/.local/share/sirca-shell/Osd.silent.qml" /usr/local/share/sirca-shell/Osd.silent.qml /usr/share/sirca-shell/Osd.silent.qml; do [ -f "$c" ] && { SILENT="$c"; break; }; done
     if [ -f "$OSD/Osd.qml" ] && [ -n "$SILENT" ]; then cp "$OSD/Osd.qml" "$STATE/Osd.qml"; cp "$SILENT" "$OSD/Osd.qml"; fi
     systemctl --user start plasma-plasmashell; trap - ERR
+    # the unit went missing (an older install linked it, and `disable` deletes a linked unit): put the installed copy back
+    for u in sirca-shell.service sirca-shell-fallback.service; do [ -e "$HOME/.config/systemd/user/$u" ] || { for d in "$HOME/.local/lib/systemd/user" /usr/local/lib/systemd/user /usr/lib/systemd/user; do
+        [ -f "$d/$u" ] && { install -m 644 "$d/$u" "$HOME/.config/systemd/user/$u"; systemctl --user daemon-reload; break; }; done; }; done
     systemctl --user enable --now sirca-shell.service
     # Super / Alt+F1: the service runs with --own-launcher-key and takes them from plasmashell's (now widget-less) launcher action
     echo "Sirca Shell is on. 'sirca-shell-switch off' restores the Plasma panels." ;;

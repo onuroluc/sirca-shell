@@ -43,6 +43,7 @@ int main(int argc, char **argv)
     // WITHOUT creating anything. Catches what took the bar down on 2026-09-18: a bad property value in one file makes
     // the whole shell fail to load, and systemd then falls back to the Plasma panels. sirca-shell-reload runs this first
     // and refuses to restart a working shell with a broken build. Run with QT_QPA_PLATFORM=offscreen.
+    if (app.arguments().contains(QStringLiteral("--version"))) { printf("%s %s (build %s)\n", qPrintable(QCoreApplication::applicationName()), GLASS_VERSION, GLASS_BUILD_COMMIT); return 0; }
     if (const int ci = app.arguments().indexOf(QStringLiteral("--check")); ci >= 0) {
         QQmlEngine engine;
         engine.rootContext()->setContextObject(new KLocalizedContext(&engine));

@@ -2,6 +2,13 @@
 
 Versions, newest first. `./update.sh` brings you to the newest one; the shell can also check once a day (Sirca Settings › Behaviour › Updates).
 
+## 0.7.1 (2026-09-23)
+
+- Fixed: after `sirca-shell-switch off`, `on` said the unit does not exist (the installer had linked the systemd unit,
+  and systemd deletes a linked unit when it is disabled). Units are copied now, and `on` restores a missing one.
+- `update.sh` restarts the shell itself, no longer re-imports the author's layout over yours, and says when a
+  re-login is needed (rebuilt effect or decoration).
+
 ## 0.7.0 (2026-09-23)
 
 - Fixed: on a fresh install the KWin effect blurred nothing until "Blur all except matching" was chosen in its settings
