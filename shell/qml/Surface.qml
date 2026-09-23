@@ -43,11 +43,21 @@ Window {
     Timer { id: lostLater; interval: 80; onTriggered: if (surface.popupFocus && !surface.active) { if (surface.focusDebug) console.log("focus LOST ->", surface.title); surface.focusLost() } }
 
     property bool holdOpen: false              // set by the bar itself: a lobe is open, cards are showing, …
+    // ---- #7: visibility "always" | "dodge" | "below" (Config.barVisibility / dockVisibility) and the state the look follows
+    property string visibility: "dodge"
+    readonly property bool reserve: visibility === "always"
+    property bool maximizedHere: false         // a maximised window on this screen (Dock scans the task model)
+    property bool keepOnFullscreen: false      // the "fullscreen" look's mode is "keep": stay, raised above the window
+    readonly property string lookState: quiet ? (keepOnFullscreen ? "fullscreen" : "normal") : maximizedHere ? "maximized" : (covered && !dodge) ? "touched" : "normal"
+    onVisibilityChanged: if (hasBeenSetUp && visible) Shell.setExclusiveZone(surface, reserve ? strut : 0)
+    // kept on a full-screen window: the top layer sits under full-screen windows, the overlay layer above them
+    readonly property bool raised: quiet && keepOnFullscreen
+    onRaisedChanged: if (hasBeenSetUp) Shell.setLayerName(surface, raised ? "overlay" : "top")
     property bool quiet: false                 // a fullscreen window has focus: not even the edge strip
     property real slideMax: 80
     property rect edgeStrip: Qt.rect(0, 0, 0, 0)   // x/width of the reveal strip, in surface coordinates
     readonly property bool pointerIn: hover.hovered
-    readonly property bool shouldShow: !dodge || !covered || holdOpen || pointerIn
+    readonly property bool shouldShow: !dodge || !covered || holdOpen || pointerIn || raised
     property bool shown: true
     readonly property bool dbg: Qt.application.arguments.indexOf("--debug") >= 0
     // a window moved over the bar: leave at once, like a Plasma panel does. (The dwell below is only for the pointer
@@ -102,7 +112,7 @@ Window {
     }
     onPolygonChanged: applyShape()
     onLobesChanged: applyShape()
-    onStrutChanged: if (visible) Shell.setExclusiveZone(surface, dodge ? 0 : strut)
+    onStrutChanged: if (visible) Shell.setExclusiveZone(surface, reserve ? strut : 0)
     onVisibleChanged: if (visible) { Qt.callLater(applyShape); resend.start() }
     // --fps: log swapped frames per half second while something is animating
     property int frames: 0
@@ -125,7 +135,7 @@ Window {
     Timer { id: resend; interval: 250; onTriggered: surface.applyShape() }   // belt and braces after mapping
     Component.onCompleted: {
         strutSize = strut;
-        Shell.setupLayer(surface, edge, dodge ? 0 : strut, "dock");
+        Shell.setupLayer(surface, edge, reserve ? strut : 0, "dock");
         hasBeenSetUp = true;
         visible = !userHidden;
         applyShape();   // synchronously after show(): rides on the surface's first commit, which the effect samples

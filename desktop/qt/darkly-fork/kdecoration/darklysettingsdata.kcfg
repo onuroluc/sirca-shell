@@ -109,6 +109,11 @@
     <!-- outline width in tenths of a pixel; the focused window is marked by a slightly thicker edge, not by a glow -->
     <entry name="GlassOutlineWidthActive" type = "Int"><default>16</default></entry>
     <entry name="GlassOutlineWidthInactive" type = "Int"><default>10</default></entry>
+    <!-- the corner arcs are stroked a second time at this opacity (percent): a 1 px anti-aliased arc reads dimmer than a
+         straight run. Per state, because a 1 px line and a 1.6 px line need very different amounts (2026-09-23: the
+         inactive corners came out brighter and thicker than their edges with one formula for both). -->
+    <entry name="GlassOutlineArcActive" type = "Int"><default>11</default></entry>
+    <entry name="GlassOutlineArcInactive" type = "Int"><default>35</default></entry>
     <entry name="GlassFocusGlow" type = "Bool"><default>false</default></entry>
 
     <entry name="DrawBorderOnMaximizedWindows" type = "Bool">

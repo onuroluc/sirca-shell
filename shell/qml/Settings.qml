@@ -140,6 +140,15 @@ Window {
                     Section { title: "Notifications"
                         Row_ { label: "Native notifications"; hint: "Cards and history drawn by the shell. Off = the hosted Plasma applet"; key: "nativeNotifications"
                             GlassSwitch { checked: Config.nativeNotifications; onToggled: on => win.setKey("nativeNotifications", on, true) } } }
+                    Section { title: "Tile widgets"
+                        Row_ { label: "Click"; hint: "Quick-settings tiles placed in the bar (edit mode › Add): a click toggles the tile, or opens its page. Middle click always opens; scroll on Volume changes it, middle click on Volume jumps to the next output"; key: "barTileClick"; height: 58 + Math.max(0, clickFlow.implicitHeight - 30)
+                            Flow { id: clickFlow; width: 330; spacing: 6
+                                readonly property var names: ({ volume: "Volume", network: "Network", bluetooth: "Bluetooth", dnd: "Do Not Disturb", nightlight: "Night Light", power: "Power profile", caffeine: "Caffeine", mic: "Microphone" })
+                                readonly property var modes: Config.get("barTileClick", {}) || {}
+                                function modeOf(id) { const m = modes[id]; if (m === "page" || m === "toggle") return m; return (id === "volume" || id === "network") ? "page" : "toggle" }
+                                Repeater { model: ["volume", "network", "bluetooth", "dnd", "nightlight", "power", "caffeine", "mic"]
+                                    Chip { required property string modelData; text: clickFlow.names[modelData] + ": " + (clickFlow.modeOf(modelData) === "page" ? "open" : "toggle"); on: clickFlow.modeOf(modelData) === "page"
+                                        onTapped: { const m = Object.assign({}, clickFlow.modes); m[modelData] = clickFlow.modeOf(modelData) === "page" ? "toggle" : "page"; win.setKey("barTileClick", m, true) } } } } } }
                     Section { title: "Quick settings"
                         Row_ { label: "Tiles"; hint: "What the panel shows. Right-click a tile in the panel to drag them into another order"; key: "qsTiles"; height: 58 + Math.max(0, tileFlow.implicitHeight - 30)
                             Flow { id: tileFlow; width: 330; spacing: 6
@@ -172,8 +181,16 @@ Window {
                 // Behaviour
                 Column { visible: win.page === 3; width: parent.width; spacing: 18
                     Section { title: "Windows"
-                        Row_ { label: "Dodge windows"; hint: "Bar and dock slide away under windows instead of reserving space"; key: "dodge"
-                            GlassSwitch { checked: Config.dodge; onToggled: on => win.setKey("dodge", on, true) } }
+                        Row_ { label: "Bar and windows"; hint: "Never touch it reserves space; hide = slide away under a window; below = windows go under the bar. The looks per state (touched, maximised, full-screen) are in edit mode › Bar"; key: "barVisibility"
+                            Row { spacing: 6
+                                Chip { text: "Never touch"; on: Config.barVisibility === "always"; onTapped: win.setKey("barVisibility", "always", true) }
+                                Chip { text: "Hide"; on: Config.barVisibility === "dodge"; onTapped: win.setKey("barVisibility", "dodge", true) }
+                                Chip { text: "Below"; on: Config.barVisibility === "below"; onTapped: win.setKey("barVisibility", "below", true) } } }
+                        Row_ { label: "Dock and windows"; key: "dockVisibility"
+                            Row { spacing: 6
+                                Chip { text: "Never touch"; on: Config.dockVisibility === "always"; onTapped: win.setKey("dockVisibility", "always", true) }
+                                Chip { text: "Hide"; on: Config.dockVisibility === "dodge"; onTapped: win.setKey("dockVisibility", "dodge", true) }
+                                Chip { text: "Below"; on: Config.dockVisibility === "below"; onTapped: win.setKey("dockVisibility", "below", true) } } }
                         Row_ { label: "Snap zones"; hint: "While you drag a window a strip of layouts appears under the bar; drop on one to tile the window there"; key: "snapZones"
                             GlassSwitch { checked: Config.get("snapZones", true) !== false; onToggled: on => win.setKey("snapZones", on, true) } }
                         Row_ { label: "Record sound"; hint: "Screen recordings include what the computer plays. The microphone is never recorded"; key: "recordSound"

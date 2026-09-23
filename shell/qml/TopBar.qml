@@ -19,10 +19,14 @@ Surface {
     readonly property int fitW: Math.round(Math.max(480, Math.min(screenW - 16, 2 * Math.max(barContent.leftW, barContent.rightW) + barContent.centerW + 56)))
     // (barWMode was read but never declared until 2026-09-23, so "fill" and "fit" silently behaved as the custom width)
     readonly property string barWMode: Config.barWidthMode
-    readonly property int barW: bar.barWMode === "fill" ? screenW - 2 * Config.barFillMargin
+    // the look for the bar's state (#7: touched / maximised / full-screen, see Config.lookFor); "fill" = the whole screen edge
+    readonly property var look: Config.lookFor("bar", bar.lookState)
+    readonly property int barW: look.width === "fill" ? screenW
+                              : bar.barWMode === "fill" ? screenW - 2 * Config.barFillMargin
                               : bar.barWMode === "fit" ? fitW
                               : bar.barWMode === "auto" ? Math.min(screenW, Config.barWidthAutoFor(screenW))
                               : Math.min(screenW, Config.barWidth)
+    readonly property real radiusNow: look.corners === "square" ? 0 : Config.cornerRadius
     property bool editing: false                // edit mode: widgets become chips (see the edit overlay in barContent)
     signal editRequested()
     readonly property int sidePad: Math.max(0, Math.min(32, Math.floor((screenW - barW) / 2)))   // room for the shadow left/right of the bar
@@ -32,7 +36,9 @@ Surface {
     edgeStrip: Qt.rect(sidePad, 0, bar.barW, 0)
     holdOpen: openLobe !== "" || cardCount > 0 || clockBox.osdOn || editing
     dodge: Config.barDodge
-    blur: Config.barBlur
+    visibility: Config.barVisibility
+    keepOnFullscreen: Config.barFullscreenMode === "keep"
+    blur: look.blur
 
     property bool showingDesktop: false
     property string activeTitle: ""
@@ -56,7 +62,8 @@ Surface {
     function clockString() { const d = new Date(); return (Config.clockDate ? Qt.formatDate(d, Config.dateFormat) + "   " : "") + Qt.formatTime(d, clockFormat) }
     function toggle(name) { openLobe = (openLobe === name) ? "" : name }
     // quick settings, opened on its Sound page (the privacy widget): the panel is built on demand if it is not yet
-    function openSoundPage() { warm = true; const q = controlLoader.item; if (q && q.page !== undefined) q.page = "sound"; openLobe = "gear" }
+    function openSoundPage() { openPage("sound") }
+    function openPage(page) { warm = true; const q = controlLoader.item; if (q && q.page !== undefined) q.page = page !== "" ? page : "main"; openLobe = "gear" }
 
     // a hosted applet's own preferred size, clamped; fallbacks until it has loaded
     function prefW(host, fallback) { const f = (host && host.appletItem) ? host.appletItem.fullRepresentationItem : null; return (f && f.Layout && f.Layout.preferredWidth > 0) ? Math.min(f.Layout.preferredWidth, 900) + 2 * Config.lobePad : fallback + 2 * Config.lobePad }
@@ -196,7 +203,8 @@ Surface {
         anchors.fill: parent
         bar: bar.barRect
         reach: bar.polygon                 // the fully grown outline: the shadow layers are sized once per open/close, not per frame
-        tint: Config.barTint; rim: Qt.rgba(1, 1, 1, Config.barRimAlpha * Config.mixn(1, 3.2)); sheen: Config.barSheen * Config.mixn(1, 2.5); shadowStrength: Config.barShadow   // literal-ok: the rim is white light in both modes
+        radius: bar.radiusNow
+        tint: Config.barTintAt(bar.look.opacity); rim: Qt.rgba(1, 1, 1, Config.barRimAlpha * Config.mixn(1, 3.2)); sheen: Config.barSheen * Config.mixn(1, 2.5); shadowStrength: Config.barShadow   // literal-ok: the rim is white light in both modes
         lobes: [{ x: trayRect.x, w: trayRect.width, h: trayH }, { x: clockRect.x, w: clockRect.width, h: clockH }, { x: gearRect.x, w: gearRect.width, h: gearH }, { x: notifRect.x, w: notifRect.width, h: notifH }, { x: disksRect.x, w: disksRect.width, h: disksH }, { x: sysmonRect.x, w: sysmonRect.width, h: sysmonH }, { x: mediaRect.x, w: mediaRect.width, h: mediaH }, { x: cardsRect.x, w: cardsRect.width, h: cardsH }]
         onPolygonChanged: bar.pushShape()
     }
@@ -219,9 +227,9 @@ Surface {
         if (!Config.barBlur) { Shell.dbusSendTyped("org.kde.KWin", "/Glass", "org.kde.KWin.Glass", "clearLobes", "sii", ["sirca-shell", bar.width, bar.height]); return }
         let boxes = [barRect.x, barRect.y, barRect.width, barRect.height];
         // lobe boxes reach up into the bar: their own rounded top corners must hide inside it, or they notch the junction
-        const up = Math.min(Config.cornerRadius, barH - 15);
+        const up = Math.min(bar.radiusNow, barH - 15);
         for (const r of [trayRect, clockRect, gearRect, notifRect, disksRect, sysmonRect, mediaRect, cardsRect]) if (r.height > 1) boxes = boxes.concat([r.x, r.y - up, r.width, r.height + up]);
-        Shell.dbusSendTyped("org.kde.KWin", "/Glass", "org.kde.KWin.Glass", "setLobes", "siivdd", ["sirca-shell", bar.width, bar.height, boxes, Config.cornerRadius, shape.fillet * 1.17]);
+        Shell.dbusSendTyped("org.kde.KWin", "/Glass", "org.kde.KWin.Glass", "setLobes", "siivdd", ["sirca-shell", bar.width, bar.height, boxes, bar.radiusNow, shape.fillet * 1.17]);
     }
     Component.onCompleted: {
         Shell.setKeyboardMode(bar, "none");
@@ -231,6 +239,7 @@ Surface {
         if (Qt.application.arguments.indexOf("--test-showdesktop") >= 0) sdTest.start();
     }
     onWidthChanged: { pushShape(); island.layoutTick++ }
+    onRadiusNowChanged: pushShape()
     onHeightChanged: pushShape()
     Component.onDestruction: Shell.dbusSendTyped("org.kde.KWin", "/Glass", "org.kde.KWin.Glass", "clearLobes", "sii", ["sirca-shell", bar.width, bar.height])
 
@@ -276,6 +285,7 @@ Surface {
             case "title": return titleRow; case "clock": return clockBox; case "date": return dateW; case "system": return sysW; case "media": return island; case "bell": return bell; case "gear": return gear
             case "battery": return batteryW; case "mic": return micW; case "privacy": return privacyW; case "keyboard": return keyboardW; case "weather": return weatherW; case "disks": return disksBtn }
             if (n.startsWith("user:")) { for (let i = 0; i < userWidgets.count; ++i) { const it = userWidgets.itemAt(i); if (it && it.name === n.substring(5)) return it } }
+            if (n.startsWith("tile:")) { for (let i = 0; i < barTiles.count; ++i) { const it = barTiles.itemAt(i); if (it && it.name === n.substring(5)) return it } }
             return null }
         function placed(n) { return Config.barLeft.indexOf(n) >= 0 || Config.barCenter.indexOf(n) >= 0 || Config.barRight.indexOf(n) >= 0 }
         function live(n) { if (!placed(n)) return false
@@ -284,6 +294,7 @@ Surface {
             if (n === "battery") return batteryW.shown; if (n === "mic") return micW.shown; if (n === "privacy") return privacyW.shown; if (n === "keyboard") return keyboardW.shown
             if (n === "weather") return weatherW.hasData || weatherW.pending; if (n === "disks") return disksPanel.count > 0
             if (n.startsWith("user:")) return userWidgets.count > 0 && !!itemOf(n)   // reads count: the layout re-runs when a widget folder appears
+            if (n.startsWith("tile:")) { const it = itemOf(n); return !!it && it.shown }
             return true }
         // the title is elastic: last in its group it takes what is left; followed by other widgets it gets a fixed slot
         function slot(n, last) { if (n === "title") return last ? 0 : Config.titleMaxWidth; const it = itemOf(n); return it ? it.width : 0 }
@@ -432,6 +443,11 @@ Surface {
             source: "drive-removable-media-symbolic"; active: bar.openLobe === "disks"; hovered: dkh.hovered
             HoverHandler { id: dkh }
             TapHandler { onTapped: bar.toggle("disks") } }
+        // quick-settings tiles as bar widgets (BarTile, kind "tile:<id>"); the data comes from the quick settings panel once built
+        Repeater { id: barTiles; model: ["volume", "network", "bluetooth", "dnd", "nightlight", "power", "caffeine", "mic"]
+            BarTile { required property string modelData; name: modelData; qs: bar.nativeControl; anchors.verticalCenter: parent.verticalCenter
+                allowed: barContent.placed("tile:" + name) && !bar.editing; x: barContent.at("tile:" + name)
+                onOpenPage: page => bar.openPage(page); onOsd: (icon, v) => clockBox.showLocal(icon, v) } }
         // user widgets (~/.config/<app>/widgets/<name>, see examples/widgets), placed like any other widget under the kind "user:<name>"
         Repeater { id: userWidgets; model: UserWidgets.names
             UserWidget { required property string modelData; name: modelData; height: parent.height; y: 0; quiet: bar.busy

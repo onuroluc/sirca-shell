@@ -30,6 +30,7 @@ public:
     // type the surface as a dock, which is what the Glass effect keys its panel treatment on.
     Q_INVOKABLE void setupLayer(QQuickWindow *window, const QString &edge, int exclusiveZone, const QString &scope = QStringLiteral("dock"));
     Q_INVOKABLE void setExclusiveZone(QQuickWindow *window, int zone);
+    Q_INVOKABLE void setLayerName(QQuickWindow *window, const QString &layer);   // "top" | "overlay" (kept on a full-screen window) | "bottom"
     // multi-screen: the primary output (QGuiApplication::primaryScreen); the config key "primaryScreen" (an output name)
     // overrides it. Screens come and go: primaryScreenChanged fires on both.
     Q_PROPERTY(QString primaryScreenName READ primaryScreenName NOTIFY primaryScreenChanged)

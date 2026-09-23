@@ -113,6 +113,7 @@ Item {
 
     // ---- tiles as data (Config "qsTiles": the shown ids in order; the rows "sun" and "sliders" ride in the same list)
     readonly property var allTiles: ["network", "bluetooth", "dnd", "nightlight", "power", "caffeine", "mic", "displays", "settings"]
+    readonly property var barTiles: ["volume", "network", "bluetooth", "dnd", "nightlight", "power", "caffeine", "mic"]   // what BarTile can place in the bar
     readonly property var allIds: allTiles.concat(["sun", "sliders"])
     // (a list from the config arrives as a sequence wrapper, not a JS Array: Array.isArray is false for it, hence the length test)
     readonly property var tileOrder: { const v = Config.get("qsTiles", null); return v && v.length !== undefined ? Array.prototype.slice.call(v).filter(x => allIds.indexOf(x) >= 0) : allIds }
@@ -133,6 +134,7 @@ Item {
         case "mic": return { available: hasSource, icon: micMuted ? "mic-off-symbolic" : "mic-on-symbolic", title: "Microphone", status: micStatus, on: hasSource && !micMuted, more: true }
         case "displays": return { available: true, icon: "video-display-symbolic", title: "Displays", status: bright ? bright.label : "", on: false, more: false }
         case "settings": return { available: true, icon: "preferences-system-symbolic", title: "System Settings", status: "", on: false, more: false }
+        case "volume": return { available: hasSink, icon: volIcon(), title: "Volume", status: hasSink ? (vol.muted ? "Muted" : volumePct + " %") : "", on: hasSink && !vol.muted, more: true }
         } return { available: false, icon: "", title: id, status: "", on: false, more: false } }
     function tileToggle(id) { switch (id) {
         case "network": if (!net) return; if (wifiThere) net.enableWireless(!wifiOn); else page = "network"; break
@@ -143,13 +145,19 @@ Item {
         case "caffeine": caffeine.toggle(); break
         case "mic": if (vol) vol.toggleMicMute(); break
         case "displays": openKcm("kcm_kscreen"); break
-        case "settings": openKcm(""); break } }
+        case "settings": openKcm(""); break
+        case "volume": if (vol) vol.toggleMute(); break } }
     function tileOpen(id) { switch (id) {
         case "network": if (net) page = "network"; break
         case "bluetooth": openKcm("kcm_bluetooth"); break
         case "nightlight": openKcm("kcm_nightlight"); break
         case "power": openKcm("kcm_powerdevilprofilesconfig"); break
-        case "mic": page = "sound"; break } }
+        case "mic": page = "sound"; break
+        case "volume": page = "sound"; break } }
+    // the bar's tile widgets: what a click does is the user's ("barTileClick": { volume: "page" | "toggle", ... }); a page
+    // opens the quick settings on it, toggle is the tile's own action. Defaults: volume and network open their page.
+    function tileClickMode(id) { const m = Config.get("barTileClick", {}) || {}; if (m[id] === "page" || m[id] === "toggle") return m[id]; return (id === "volume" || id === "network") ? "page" : "toggle" }
+    function tilePage(id) { switch (id) { case "volume": case "mic": return "sound"; case "network": return "network"; default: return "" } }
     // ---- arranging (right-click a tile): a working copy of the list until Done
     property bool arranging: false
     property var arrangeOn: []                                 // the shown ids, in order, while arranging

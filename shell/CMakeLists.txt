@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(sirca-shell VERSION 0.6.1 LANGUAGES C CXX)   # the released version: bump here, the public VERSION file and tag follow (see publish/make_public.sh)
+project(sirca-shell VERSION 0.7.0 LANGUAGES C CXX)   # the released version: bump here, the public VERSION file and tag follow (see publish/make_public.sh)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -68,6 +68,7 @@ qt_add_qml_module(sirca-shell
         qml/RemovableMedia.qml
         qml/MediaSpectrum.qml
         qml/MeterPatch.qml
+        qml/BarTile.qml
         qml/Wallpaper.qml
         qml/PowerMenu.qml
         qml/Welcome.qml

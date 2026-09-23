@@ -32,7 +32,7 @@ QtObject {
     // the bar and the dock: built at once on the primary screen, on demand elsewhere
     property var bar: null
     property var dock: null
-    readonly property var _cBar: Component { TopBar { screen: set.screen; userHidden: !set.wantBar
+    readonly property var _cBar: Component { TopBar { screen: set.screen; userHidden: !set.wantBar; maximizedHere: set.dock ? set.dock.anyMaximized : false
         recorder: set.host.recorder; editing: set.host.editing; onEditRequested: set.host.setEditing(true)
         quiet: set.host.fullscreenActive; busy: set.host.fullscreenActive || set.host.gameActive; showingDesktop: set.host.showingDesktop
         activeTitle: set.host.activeTitle; activeApp: set.host.activeApp; activeIcon: set.host.activeIcon

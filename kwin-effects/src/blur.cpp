@@ -219,6 +219,9 @@ BlurEffect::BlurEffect()
         m_roundedOnscreenPass.edgeLightingLocation = m_roundedOnscreenPass.shader->uniformLocation("edgeLighting");
         m_roundedOnscreenPass.lobeCountLocation = m_roundedOnscreenPass.shader->uniformLocation("lobeCount");
         m_roundedOnscreenPass.lobesLocation = m_roundedOnscreenPass.shader->uniformLocation("lobes");
+        m_roundedOnscreenPass.noiseTexLocation = m_roundedOnscreenPass.shader->uniformLocation("noiseTex");
+        m_roundedOnscreenPass.noiseTextureSizeLocation = m_roundedOnscreenPass.shader->uniformLocation("noiseTextureSize");
+        m_roundedOnscreenPass.noiseScaleLocation = m_roundedOnscreenPass.shader->uniformLocation("noiseScale");
         m_roundedOnscreenPass.lobeRadiusLocation = m_roundedOnscreenPass.shader->uniformLocation("lobeRadius");
         m_roundedOnscreenPass.lobeFilletLocation = m_roundedOnscreenPass.shader->uniformLocation("lobeFillet");
     }
@@ -248,17 +251,7 @@ BlurEffect::BlurEffect()
         m_upsamplePass.saturationCompensationLocation = m_upsamplePass.shader->uniformLocation("saturationCompensation");
     }
 
-    m_noisePass.shader = ShaderManager::instance()->generateShaderFromFile(ShaderTrait::MapTexture,
-                                                                           glassShaderPath("vertex.vert"),
-                                                                           glassShaderPath("noise.frag"));
-    if (!m_noisePass.shader) {
-        qCWarning(KWIN_BLUR) << "Failed to load noise pass shader";
-        return;
-    } else {
-        m_noisePass.mvpMatrixLocation = m_noisePass.shader->uniformLocation("modelViewProjectionMatrix");
-        m_noisePass.noiseTextureSizeLocation = m_noisePass.shader->uniformLocation("noiseTextureSize");
-        m_noisePass.noiseScaleLocation = m_noisePass.shader->uniformLocation("noiseScale");
-    }
+    // (the noise used to be its own additive pass after the on-screen draw; it lives in onscreen_rounded.glsl now)
 
     initBlurStrengthValues();
     reconfigure(ReconfigureAll);
@@ -1799,35 +1792,23 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
     glEnable(GL_BLEND);
     glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    auto drawBlurredRegion = [&](GLTexture *blurredTexture, int vertexOffset, int currentVertexCount, float blurOffset) {
+    // the grain is part of this pass (masked by the shape like everything else, see onscreen_rounded.glsl): texture unit 1
+    GLTexture *noiseTexture = (combinedBlurSettings.noiseStrength > 0 || (splitRenderRegions && m_decorationBlurSettings.noiseStrength > 0)) ? ensureNoiseTexture() : nullptr;
+    if (noiseTexture) {
+        glActiveTexture(GL_TEXTURE1);
+        noiseTexture->bind();
+        glActiveTexture(GL_TEXTURE0);
+        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.noiseTexLocation, 1);
+        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.noiseTextureSizeLocation, QVector2D(noiseTexture->width(), noiseTexture->height()));
+    }
+    auto noiseScaleFor = [&](int noiseStrength) { return (noiseTexture && noiseStrength > 0) ? static_cast<float>(noiseStrength - 1) / 255.0f : 0.0f; };   // (the old texture held rand() % strength)
+
+    auto drawBlurredRegion = [&](GLTexture *blurredTexture, int vertexOffset, int currentVertexCount, float blurOffset, int noiseStrength) {
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.offsetLocation, blurOffset * m_upsampleOffset);
+        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.noiseScaleLocation, noiseScaleFor(noiseStrength));
         glActiveTexture(GL_TEXTURE0);
         blurredTexture->bind();
         vbo->draw(GL_TRIANGLES, vertexOffset, currentVertexCount);
-    };
-
-    auto drawNoiseRegion = [&](int noiseStrength, int vertexOffset, int currentVertexCount) {
-        if (noiseStrength <= 0 || currentVertexCount == 0) {
-            return;
-        }
-
-        if (GLTexture *noiseTexture = ensureNoiseTexture()) {
-            ShaderManager::instance()->pushShader(m_noisePass.shader.get());
-
-            QMatrix4x4 noiseProjectionMatrix = viewport.projectionMatrix();
-            noiseProjectionMatrix.translate(scaledBackgroundRect.x(), scaledBackgroundRect.y());
-
-            m_noisePass.shader->setUniform(m_noisePass.mvpMatrixLocation, noiseProjectionMatrix);
-            m_noisePass.shader->setUniform(m_noisePass.noiseTextureSizeLocation, QVector2D(noiseTexture->width(), noiseTexture->height()));
-            // the old per-strength texture held rand() % strength, i.e. up to (strength - 1) / 255
-            m_noisePass.shader->setUniform(m_noisePass.noiseScaleLocation, static_cast<float>(noiseStrength - 1) / 255.0f);
-
-            glActiveTexture(GL_TEXTURE0);
-            noiseTexture->bind();
-            vbo->draw(GL_TRIANGLES, vertexOffset, currentVertexCount);
-
-            ShaderManager::instance()->popShader();
-        }
     };
 
     const float contentTintStrength = tintStrengthForRegion(contentShape.isEmpty() && !frameShape.isEmpty());
@@ -1838,7 +1819,8 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
     drawBlurredRegion(contentBlurredTexture,
                       6,
                       contentVertexCount,
-                      splitBlurSettings ? contentBlurSettings.offset : combinedBlurSettings.offset);
+                      splitBlurSettings ? contentBlurSettings.offset : combinedBlurSettings.offset,
+                      splitBlurSettings ? contentBlurSettings.noiseStrength : combinedBlurSettings.noiseStrength);
 
     if (splitRenderRegions && frameVertexCount > 0) {
         GLTexture *frameBlurredTexture = (splitBlurSettings && !sharedPyramid) ? runBlurPass(m_decorationBlurSettings) : contentBlurredTexture;
@@ -1846,37 +1828,13 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         drawBlurredRegion(frameBlurredTexture,
                           6 + contentVertexCount,
                           frameVertexCount,
-                          splitBlurSettings ? m_decorationBlurSettings.offset : combinedBlurSettings.offset);
+                          splitBlurSettings ? m_decorationBlurSettings.offset : combinedBlurSettings.offset,
+                          splitBlurSettings ? m_decorationBlurSettings.noiseStrength : combinedBlurSettings.noiseStrength);
     }
 
     glDisable(GL_BLEND);
 
     ShaderManager::instance()->popShader();
-
-    if (combinedBlurSettings.noiseStrength > 0 || (splitRenderRegions && m_decorationBlurSettings.noiseStrength > 0)) {
-        // Apply an additive noise onto the blurred image. The noise is useful to mask banding
-        // artifacts, which often happens due to the smooth color transitions in the blurred image.
-
-        glEnable(GL_BLEND);
-        if (opacity < 1.0) {
-            // GL_CONSTANT_ALPHA reads the blend colour: without this it was whatever the last user left (KWin: 0 → no noise)
-            glBlendColor(0.0f, 0.0f, 0.0f, opacity);
-            glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE);
-        } else {
-            glBlendFunc(GL_ONE, GL_ONE);
-        }
-
-        drawNoiseRegion(splitBlurSettings ? contentBlurSettings.noiseStrength : combinedBlurSettings.noiseStrength,
-                        6,
-                        contentVertexCount);
-        if (splitRenderRegions) {
-            drawNoiseRegion(splitBlurSettings ? m_decorationBlurSettings.noiseStrength : combinedBlurSettings.noiseStrength,
-                            6 + contentVertexCount,
-                            frameVertexCount);
-        }
-
-        glDisable(GL_BLEND);
-    }
 
     vbo->unbindArrays();
 }

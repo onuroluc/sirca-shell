@@ -14,6 +14,10 @@ QtObject {
     function setPct(v, unmute) { if (!hasSink) return; sink.volume = Math.round(v) * PulseAudio.NormalVolume / 100; if (unmute && sink.muted && v > 0) sink.muted = false }
     function toggleMute() { if (hasSink) sink.muted = !sink.muted }
     readonly property var sinks: PulseObjectFilterModel { filterOutInactiveDevices: true; sourceModel: SinkModel {} }
+    // the next output device becomes the default (headphones <-> speakers from the bar's volume widget); the name of the new one
+    function nextSink() { const n = sinks.rowCount(); if (n < 2) return ""
+        let cur = -1; for (let i = 0; i < n; ++i) { const o = sinks.data(sinks.index(i, 0), sinks.role("PulseObject")); if (o && o.default) { cur = i; break } }
+        const o = sinks.data(sinks.index((cur + 1) % n, 0), sinks.role("PulseObject")); if (!o) return ""; o.default = true; return o.description || o.name || "" }
     readonly property var sources: PulseObjectFilterModel { filterOutInactiveDevices: true; sourceModel: SourceModel {} }
     // ---- microphone: the default source, and who is recording from it right now (source outputs = capture streams;
     // virtual ones are monitors and loopbacks, not apps listening)

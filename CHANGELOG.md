@@ -2,6 +2,23 @@
 
 Versions, newest first. `./update.sh` brings you to the newest one; the shell can also check once a day (Sirca Settings › Behaviour › Updates).
 
+## 0.7.0 (2026-09-23)
+
+- Fixed: on a fresh install the KWin effect blurred nothing until "Blur all except matching" was chosen in its settings
+  (the default was a whitelist of placeholder window classes inherited from Better Blur). Now it blurs every window that
+  asks for it, out of the box. (#9)
+- Fixed: a faint grain band above popups and outside rounded corners (the noise was drawn over the blur region's
+  rectangles; it is now part of the shape-masked pass). The "ghost panel" of #9.
+- Fixed: unfocused windows had brighter, thicker corner arcs than their edges (the decoration's corner compensation was tuned for the focused outline only; it is now a setting per state).
+- The effect's defaults are now the look from the screenshots (blur, refraction, corner radii, noise, saturation); a
+  fresh install used to run with Better Blur's defaults and looked like a different effect.
+- Bar and dock: choose what happens with windows (never touch / hide under them / windows go below), and a look for each
+  state: when a window touches the surface, when a window is maximised, when a full-screen window has focus (hide, or
+  keep it on top). Each with its own opacity, blur, and for the bar width and corners. Edit mode > Bar / Dock. (#7)
+- Quick-settings tiles as bar widgets: Volume, Network, Bluetooth, Do Not Disturb, Night Light, Power profile, Caffeine
+  and Microphone can sit in the bar (edit mode > Add). Click toggles or opens the page (your choice per tile in Sirca
+  Settings > Top bar), scroll on Volume changes it, middle click on Volume jumps to the next output. (#8)
+
 ## 0.6.1 (2026-09-23)
 
 - Wording only: the README, this file and the installer's text, no code changes.

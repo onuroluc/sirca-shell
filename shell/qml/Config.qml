@@ -90,7 +90,9 @@ QtObject {
     // …plus "user:<name>" for every folder in ~/.config/<app>/widgets (UserWidgets, watched: a new widget appears in the edit shelf at once)
     readonly property var barWidgetNames: { const m = { desktop: "Show desktop", workspaces: "Workspaces", tray: "Tray", title: "Window title", clock: "Clock", date: "Date",
                                                         system: "CPU / memory", media: "Now playing", bell: "Notifications", gear: "Quick settings", weather: "Weather",
-                                                        battery: "Battery", mic: "Microphone", privacy: "Privacy", keyboard: "Keyboard layout" }
+                                                        battery: "Battery", mic: "Microphone", privacy: "Privacy", keyboard: "Keyboard layout",
+                                                        "tile:volume": "Volume", "tile:network": "Network", "tile:bluetooth": "Bluetooth", "tile:dnd": "Do Not Disturb", "tile:nightlight": "Night Light",
+                                                        "tile:power": "Power profile", "tile:caffeine": "Caffeine", "tile:mic": "Microphone (tile)" }
         const u = UserWidgets.names; for (let i = 0; i < u.length; ++i) m["user:" + u[i]] = UserWidgets.label(u[i]); return m }   // (a QStringList is not iterable with for…of)
     readonly property int titleMaxWidth: get("titleMaxWidth", 420)
     readonly property bool titleIcon: get("titleIcon", true)
@@ -114,8 +116,47 @@ QtObject {
     readonly property real dockRimAlpha: get("dockRimAlpha", get("rimAlpha", 0.09))
     readonly property real dockSheen: get("dockSheen", get("sheenAlpha", 0.06))
     readonly property real dockShadow: get("dockShadow", 0.55)
-    readonly property bool barDodge: get("barDodge", get("dodge", true))
-    readonly property bool dockDodge: get("dockDodge", get("dodge", true))
+    // ---- visibility (#7): "always" reserves space (windows never touch the surface), "dodge" slides it away under a
+    // window (the old default), "below" keeps it in place with windows going under it. The old barDodge / dodge booleans map.
+    readonly property string barVisibility: { const v = get("barVisibility", ""); if (v === "always" || v === "dodge" || v === "below") return v; return get("barDodge", get("dodge", true)) ? "dodge" : "always" }
+    readonly property string dockVisibility: { const v = get("dockVisibility", ""); if (v === "always" || v === "dodge" || v === "below") return v; return get("dockDodge", get("dodge", true)) ? "dodge" : "always" }
+    readonly property bool barDodge: barVisibility === "dodge"
+    readonly property bool dockDodge: dockVisibility === "dodge"
+    // ---- the look per state: "touched" (a window lies over the surface's strip), "maximized" (a maximised window on its
+    // screen; "touched" = same settings), "fullscreen" (a full-screen window has focus; "hide" = the old behaviour, "keep"
+    // = the surface stays, raised above the window). Every state has its own opacity, blur, (bar) width and corners.
+    readonly property real barTouchedOpacity: get("barTouchedOpacity", 0.92)
+    readonly property bool barTouchedBlur: get("barTouchedBlur", true)
+    readonly property string barTouchedWidth: get("barTouchedWidth", "keep")          // "keep" | "fill"
+    readonly property string barTouchedCorners: get("barTouchedCorners", "round")     // "round" | "square"
+    readonly property string barMaximizedMode: get("barMaximizedMode", "touched")     // "touched" | "custom"
+    readonly property real barMaximizedOpacity: get("barMaximizedOpacity", 0.92)
+    readonly property bool barMaximizedBlur: get("barMaximizedBlur", true)
+    readonly property string barMaximizedWidth: get("barMaximizedWidth", "keep")
+    readonly property string barMaximizedCorners: get("barMaximizedCorners", "round")
+    readonly property string barFullscreenMode: get("barFullscreenMode", "hide")      // "hide" | "keep"
+    readonly property real barFullscreenOpacity: get("barFullscreenOpacity", 1.0)
+    readonly property bool barFullscreenBlur: get("barFullscreenBlur", false)
+    readonly property string barFullscreenWidth: get("barFullscreenWidth", "fill")
+    readonly property string barFullscreenCorners: get("barFullscreenCorners", "square")
+    readonly property real dockTouchedOpacity: get("dockTouchedOpacity", get("dockTintAlphaTouched", 0.85))
+    readonly property bool dockTouchedBlur: get("dockTouchedBlur", true)
+    readonly property string dockMaximizedMode: get("dockMaximizedMode", "touched")
+    readonly property real dockMaximizedOpacity: get("dockMaximizedOpacity", 0.85)
+    readonly property bool dockMaximizedBlur: get("dockMaximizedBlur", true)
+    readonly property string dockFullscreenMode: get("dockFullscreenMode", "hide")
+    readonly property real dockFullscreenOpacity: get("dockFullscreenOpacity", 1.0)
+    readonly property bool dockFullscreenBlur: get("dockFullscreenBlur", false)
+    // the resolved look of a surface in a state: { opacity, blur, width, corners }; opacity < 0 = the normal one
+    function lookFor(prefix, state) {
+        const norm = { opacity: -1, blur: prefix === "bar" ? barBlur : dockBlur, width: "keep", corners: "round" }
+        if (state === "maximized" && (prefix === "bar" ? barMaximizedMode : dockMaximizedMode) === "touched") state = "touched"
+        if (state === "touched") return prefix === "bar" ? { opacity: barTouchedOpacity, blur: barTouchedBlur, width: barTouchedWidth, corners: barTouchedCorners } : { opacity: dockTouchedOpacity, blur: dockTouchedBlur, width: "keep", corners: "round" }
+        if (state === "maximized") return prefix === "bar" ? { opacity: barMaximizedOpacity, blur: barMaximizedBlur, width: barMaximizedWidth, corners: barMaximizedCorners } : { opacity: dockMaximizedOpacity, blur: dockMaximizedBlur, width: "keep", corners: "round" }
+        if (state === "fullscreen") return prefix === "bar" ? { opacity: barFullscreenOpacity, blur: barFullscreenBlur, width: barFullscreenWidth, corners: barFullscreenCorners } : { opacity: dockFullscreenOpacity, blur: dockFullscreenBlur, width: "keep", corners: "round" }
+        return norm }
+    // the bar's tint at another alpha (a state look): the same dark / light bases as barTint
+    function barTintAt(a) { return a < 0 ? barTint : mix(Qt.rgba(24/255, 25/255, 27/255, a), Qt.rgba(0.975, 0.98, 0.99, Math.min(0.97, a))) }
     readonly property int barHeight: get("barHeight", 37)
     readonly property int barGap: get("barGap", 8)
     readonly property int sheetWidth: get("sheetWidth", 440)

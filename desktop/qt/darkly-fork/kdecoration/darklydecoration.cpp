@@ -142,6 +142,7 @@ static int g_sDecoCount = 0;
 static int g_shadowSizeEnum = InternalSettings::ShadowLarge;
 static int g_shadowStrength = 255;
 static QColor g_shadowColor = Qt::black;
+static int g_outlineKey = -1;                 // the outline settings the cached shadows were drawn with (see createShadow)
 static std::shared_ptr<KDecoration3::DecorationShadow> g_sShadow;
 static std::shared_ptr<KDecoration3::DecorationShadow> g_sShadowActive;   // Glass: focused window
 static std::shared_ptr<KDecoration3::DecorationShadow> g_sShadowBare;     // Glass: windows with a hidden title bar (widgets): shadow only
@@ -1095,13 +1096,16 @@ void Decoration::createShadow()
     const bool bare = hideTitleBar();
     const int sq = isMaximized() ? 0 : squareCorners();       // a maximized window shows neither its shadow nor its line
     const int kind = bare ? 2 : (glassActive ? 1 : 0);
-    if (g_shadowSizeEnum != m_internalSettings->shadowSize() || g_shadowStrength != m_internalSettings->shadowStrength() || g_shadowColor != m_internalSettings->shadowColor()) { g_sShadow.reset(); g_sShadowActive.reset(); g_sShadowBare.reset(); g_sShadowSquared.clear(); }
+    // the outline is part of the texture: a change of its width, alpha or arc boost must redraw the cached shadows too
+    const int outlineKey = m_internalSettings->glassOutlineWidthActive() * 1000003 ^ m_internalSettings->glassOutlineWidthInactive() * 10007 ^ m_internalSettings->glassOutlineActive() * 131 ^ m_internalSettings->glassOutlineInactive() * 17 ^ m_internalSettings->glassOutlineArcActive() * 3 ^ m_internalSettings->glassOutlineArcInactive();
+    if (g_shadowSizeEnum != m_internalSettings->shadowSize() || g_shadowStrength != m_internalSettings->shadowStrength() || g_shadowColor != m_internalSettings->shadowColor() || g_outlineKey != outlineKey) { g_sShadow.reset(); g_sShadowActive.reset(); g_sShadowBare.reset(); g_sShadowSquared.clear(); }
     std::shared_ptr<KDecoration3::DecorationShadow> &slot = sq ? g_sShadowSquared[kind * 16 + sq] : (bare ? g_sShadowBare : (glassActive ? g_sShadowActive : g_sShadow));
     if (!slot || g_shadowSizeEnum != m_internalSettings->shadowSize() || g_shadowStrength != m_internalSettings->shadowStrength()
-        || g_shadowColor != m_internalSettings->shadowColor()) {
+        || g_shadowColor != m_internalSettings->shadowColor() || g_outlineKey != outlineKey) {
         g_shadowSizeEnum = m_internalSettings->shadowSize();
         g_shadowStrength = m_internalSettings->shadowStrength();
         g_shadowColor = m_internalSettings->shadowColor();
+        g_outlineKey = outlineKey;
 
         const CompositeShadowParams params = lookupShadowParams(g_shadowSizeEnum);
         if (params.isNone()) {
@@ -1180,10 +1184,10 @@ void Decoration::createShadow()
             if (!(sq & GlassTopRight)) { arcs.moveTo(o.right() - r, o.top());       arcs.arcTo(QRectF(o.right() - 2 * r, o.top(), 2 * r, 2 * r), 90, -90); }
             if (!(sq & GlassBottomRight)) { arcs.moveTo(o.right(), o.bottom() - r);    arcs.arcTo(QRectF(o.right() - 2 * r, o.bottom() - 2 * r, 2 * r, 2 * r), 0, -90); }
             if (!(sq & GlassBottomLeft)) { arcs.moveTo(o.left() + r, o.bottom());     arcs.arcTo(QRectF(o.left(), o.bottom() - 2 * r, 2 * r, 2 * r), 270, -90); }
-            // How much: measured offline (same painter code into a QImage, brightness summed across the line on a straight run
-            // and on the arc at 45 deg). At 1.0 px the arc needs the full 0.85; at 1.6 px (focused windows) 0.85/lw^2 = 0.33 left
-            // the arcs ~19 % brighter than the runs next to them, which showed on the dimmer bottom corners; ~0.11 is level.
-            painter.setOpacity(qBound(0.0, 0.85 / std::pow(lw, 4.4), 0.85));
+            // How much: a setting per state (GlassOutlineArcActive / Inactive, percent). The old formula 0.85 / lw^4.4 was
+            // tuned by summing brightness ACROSS the line; for the 1 px inactive line that turns the arc into a two-pixel
+            // 90 % stroke next to a one-pixel run, i.e. brighter and thicker corners on every unfocused window (2026-09-23).
+            painter.setOpacity(qBound(0.0, (glassActive ? m_internalSettings->glassOutlineArcActive() : m_internalSettings->glassOutlineArcInactive()) / 100.0, 1.0));
             painter.drawPath(arcs);
             painter.setOpacity(1.0);
         }

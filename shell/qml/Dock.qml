@@ -20,7 +20,10 @@ Surface {
     edgeStrip: Qt.rect((width - dockW) / 2, 0, dockW, 0)
     holdOpen: launcherOpen || previewShown || dragging || editing || dodgeExempt
     dodge: Config.dockDodge
-    blur: Config.dockBlur
+    blur: look.blur
+    visibility: Config.dockVisibility
+    keepOnFullscreen: Config.dockFullscreenMode === "keep"
+    maximizedHere: anyMaximized
     quiet: fullscreenActive
     property int hoverIndex: -2                   // -1 = launcher glyph, >= 0 task index, -2 none
     // ---- dodge modes (config dockDodgeMode). Main's watcher only says whether ANY window lies over the dock's strip
@@ -32,8 +35,21 @@ Surface {
     // a window lies over the strip and the dock does not move (dodge off, or the mode exempts that window): denser glass, so
     // the icons still read over whatever is behind them (config dockTintAlphaTouched)
     readonly property bool touched: covered && (!Config.dockDodge || dodgeExempt)
-    property real tintA: touched ? Config.get("dockTintAlphaTouched", 0.85) : Config.dockTintAlpha
+    // the look for the dock's state (#7): touched / maximised / full-screen have their own opacity and blur (Config.lookFor)
+    readonly property var look: Config.lookFor("dock", touched && lookState === "normal" ? "touched" : lookState)
+    property real tintA: look.opacity < 0 ? Config.dockTintAlpha : look.opacity
     Behavior on tintA { NumberAnimation { duration: Config.slow } }
+    // a maximised window on this screen and desktop: the "maximized" state of both surfaces (the bar reads it through ScreenSet)
+    property bool anyMaximized: false
+    function refreshMaximized() { const m = tasksModel; if (!m) { anyMaximized = false; return }
+        const R_ = TaskManager.AbstractTasksModel; const cur = vdInfo.currentDesktop; const sr = Qt.rect(screenX, screenY, screenW, Screen.height)
+        const hit = idx => { if (m.data(idx, R_.IsMinimized) || m.data(idx, R_.IsLauncher) || !m.data(idx, R_.IsMaximized)) return false
+            if (!m.data(idx, R_.IsOnAllVirtualDesktops)) { const vds = m.data(idx, R_.VirtualDesktops); if (vds && vds.length && vds.indexOf(cur) < 0) return false }
+            const g = m.data(idx, R_.Geometry); return !!g && g.width > 0 && g.x < sr.x + sr.width && g.x + g.width > sr.x && g.y < sr.y + sr.height && g.y + g.height > sr.y }
+        let c = false
+        for (let i = 0; i < m.count && !c; ++i) { const idx = m.makeModelIndex(i)
+            if (m.data(idx, R_.IsGroupParent)) { const n = m.rowCount(idx); for (let k = 0; k < n && !c; ++k) c = hit(m.makeModelIndex(i, k)) } else c = hit(idx) }
+        anyMaximized = c }
     function refreshModeCovered() {
         const m = tasksModel; if (!m || dodgeMode === "all") { modeCovered = covered; return }
         const R_ = TaskManager.AbstractTasksModel; const cur = vdInfo.currentDesktop
@@ -49,7 +65,7 @@ Surface {
     }
     onCoveredChanged: modeRefresh.kick()
     onDodgeModeChanged: modeRefresh.kick()
-    Timer { id: modeRefresh; interval: 40; onTriggered: dock.refreshModeCovered(); function kick() { if (!running) start() } }   // a throttle: a dragged window reports its frame continuously
+    Timer { id: modeRefresh; interval: 40; onTriggered: { dock.refreshModeCovered(); dock.refreshMaximized() } function kick() { if (!running) start() } }   // a throttle: a dragged window reports its frame continuously
 
     TaskManager.ActivityInfo { id: activityInfo }
     TaskManager.VirtualDesktopInfo { id: vdInfo }

@@ -8,6 +8,12 @@ uniform vec4 box;
 uniform vec4 cornerRadius;
 uniform float opacity;
 uniform vec2 blurSize;
+// the grain that hides banding, added HERE so the shape mask below applies to it: as a separate additive pass over the
+// blur region's rectangles it lit up every strip where the region is larger than the glass (the bounce room above a
+// popup, the squares outside rounded corners) as a faint ghost panel (issue #9, 2026-09-23). noiseScale 0 = off.
+uniform sampler2D noiseTex;
+uniform vec2 noiseTextureSize;
+uniform float noiseScale;
 
 in vec2 uv;
 in vec2 vertex;
@@ -36,6 +42,9 @@ void main(void)
     }
 
     sum = glass(sum, cornerRadius, position, dist);
+    if (noiseScale > 0.0) {
+        sum.rgb += texture(noiseTex, gl_FragCoord.xy / noiseTextureSize).rrr * noiseScale;
+    }
 
     float f = lobeCount > 0
         ? shapeDist(vec2(vertex.x - box.x, box.y - vertex.y), box.zw, cornerRadius)

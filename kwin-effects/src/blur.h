@@ -220,6 +220,9 @@ private:
         int lobesLocation;
         int lobeRadiusLocation;
         int lobeFilletLocation;
+        int noiseTexLocation;
+        int noiseTextureSizeLocation;
+        int noiseScaleLocation;
     } m_roundedOnscreenPass;
 
     struct

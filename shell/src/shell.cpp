@@ -222,6 +222,14 @@ void Shell::setupLayer(QQuickWindow *window, const QString &edge, int exclusiveZ
     ShellCorona::rememberStrut(edge == QLatin1String("bottom"), exclusiveZone);   // no corona is created for this
 }
 
+void Shell::setLayerName(QQuickWindow *window, const QString &layer)
+{
+    if (!window) return;
+    using W = LayerShellQt::Window;
+    W::get(window)->setLayer(layer == QLatin1String("overlay") ? W::LayerOverlay : layer == QLatin1String("bottom") ? W::LayerBottom : W::LayerTop);
+    window->requestUpdate();
+}
+
 void Shell::setExclusiveZone(QQuickWindow *window, int zone)
 {
     if (window) LayerShellQt::Window::get(window)->setExclusiveZone(zone);

@@ -65,8 +65,26 @@ Window {
             { k: "clockSize", t: "num", label: "Size", from: 11, to: 24, step: 1, unit: " px" },
             { k: "dateFormat", t: "choice", label: "Date format", options: [["ddd d MMM", "Sat 19 Sep"], ["d MMMM", "19 September"], ["dd.MM.yyyy", "19.09.2026"], ["yyyy-MM-dd", "2026-09-19"], ["M/d", "9/19"]] } ] },
         { name: "Behaviour", items: [
-            { k: "barDodge", t: "bool", label: "Hide under windows" },
-            { k: "quietWhenBusy", t: "bool", label: "Quiet during games" } ] } ]
+            { k: "barVisibility", t: "choice", label: "Windows", options: [["always", "Never touch it"], ["dodge", "Hide under them"], ["below", "Go below it"]] },
+            { k: "quietWhenBusy", t: "bool", label: "Quiet during games" } ] },
+        // #7: the bar's look per state, like Plasma's adaptive panel but every value is yours
+        { name: "Touched", items: [
+            { k: "barTouchedOpacity", t: "num", label: "Opacity when a window touches it", from: 0.1, to: 1, step: 0.01, pct: true },
+            { k: "barTouchedBlur", t: "bool", label: "Blur" },
+            { k: "barTouchedWidth", t: "choice", label: "Width", options: [["keep", "Keep"], ["fill", "Full width"]] },
+            { k: "barTouchedCorners", t: "choice", label: "Corners", options: [["round", "Round"], ["square", "Square"]] } ] },
+        { name: "Maximised", items: [
+            { k: "barMaximizedMode", t: "choice", label: "A maximised window on this screen", options: [["touched", "Same as touched"], ["custom", "Its own look"]] },
+            { k: "barMaximizedOpacity", t: "num", label: "Opacity", from: 0.1, to: 1, step: 0.01, pct: true, when: "barMaximizedMode=custom" },
+            { k: "barMaximizedBlur", t: "bool", label: "Blur", when: "barMaximizedMode=custom" },
+            { k: "barMaximizedWidth", t: "choice", label: "Width", options: [["keep", "Keep"], ["fill", "Full width"]], when: "barMaximizedMode=custom" },
+            { k: "barMaximizedCorners", t: "choice", label: "Corners", options: [["round", "Round"], ["square", "Square"]], when: "barMaximizedMode=custom" } ] },
+        { name: "Full-screen", items: [
+            { k: "barFullscreenMode", t: "choice", label: "A full-screen window", options: [["hide", "Hide the bar"], ["keep", "Keep it on top"]] },
+            { k: "barFullscreenOpacity", t: "num", label: "Opacity", from: 0.1, to: 1, step: 0.01, pct: true, when: "barFullscreenMode=keep" },
+            { k: "barFullscreenBlur", t: "bool", label: "Blur", when: "barFullscreenMode=keep" },
+            { k: "barFullscreenWidth", t: "choice", label: "Width", options: [["keep", "Keep"], ["fill", "Full width"]], when: "barFullscreenMode=keep" },
+            { k: "barFullscreenCorners", t: "choice", label: "Corners", options: [["round", "Round"], ["square", "Square"]], when: "barFullscreenMode=keep" } ] } ]
     readonly property var dockTabs: [
         { name: "Size", items: [
             { k: "dockWidthMode", t: "choice", label: "Width", options: [["fit", "Fit icons"], ["fill", "Fill screen"]] },
@@ -91,9 +109,20 @@ Window {
             { k: "dockHop", t: "bool", label: "Launch hop" },
             { k: "launcherIcon", t: "choice", label: "Launcher icon", options: [["start-here-kde-symbolic", "KDE"], ["view-app-grid-symbolic", "Grid"], ["application-menu-symbolic", "Menu"], ["search-symbolic", "Search"], ["starred-symbolic", "Star"]] } ] },
         { name: "Behaviour", items: [
-            { k: "dockDodge", t: "bool", label: "Hide under windows" },
+            { k: "dockVisibility", t: "choice", label: "Windows", options: [["always", "Never touch it"], ["dodge", "Hide under them"], ["below", "Go below it"]] },
             { k: "dockPreviews", t: "bool", label: "Window previews" },
-            { k: "dockPreviewDelay", t: "num", label: "Preview delay", from: 0, to: 1500, step: 20, unit: " ms", when: "dockPreviews=true" } ] } ]
+            { k: "dockPreviewDelay", t: "num", label: "Preview delay", from: 0, to: 1500, step: 20, unit: " ms", when: "dockPreviews=true" } ] },
+        { name: "Touched", items: [
+            { k: "dockTouchedOpacity", t: "num", label: "Opacity when a window touches it", from: 0.1, to: 1, step: 0.01, pct: true },
+            { k: "dockTouchedBlur", t: "bool", label: "Blur" } ] },
+        { name: "Maximised", items: [
+            { k: "dockMaximizedMode", t: "choice", label: "A maximised window on this screen", options: [["touched", "Same as touched"], ["custom", "Its own look"]] },
+            { k: "dockMaximizedOpacity", t: "num", label: "Opacity", from: 0.1, to: 1, step: 0.01, pct: true, when: "dockMaximizedMode=custom" },
+            { k: "dockMaximizedBlur", t: "bool", label: "Blur", when: "dockMaximizedMode=custom" } ] },
+        { name: "Full-screen", items: [
+            { k: "dockFullscreenMode", t: "choice", label: "A full-screen window", options: [["hide", "Hide the dock"], ["keep", "Keep it on top"]] },
+            { k: "dockFullscreenOpacity", t: "num", label: "Opacity", from: 0.1, to: 1, step: 0.01, pct: true, when: "dockFullscreenMode=keep" },
+            { k: "dockFullscreenBlur", t: "bool", label: "Blur", when: "dockFullscreenMode=keep" } ] } ]
     function keysOf(tabs, extra) { const out = extra.slice(); for (const t of tabs) for (const i of t.items) if (["cornerRadius", "levelMeter", "quietWhenBusy"].indexOf(i.k) < 0) out.push(i.k); return out }
     function met(when) { if (!when) return true; const p = when.split("="); return String(Config[p[0]]) === p[1] }
     function text(item, v) { return item.pct ? Math.round(v * 100) + " %" : item.mult ? Number(v).toFixed(2) + "×" : Math.round(v) + (item.unit || "") }
@@ -140,8 +169,9 @@ Window {
         Column { id: body; x: 26; y: 66; width: parent.width - 52; spacing: 10
             Flow { width: parent.width; spacing: 30
                 Repeater { model: strip.tabs.length ? strip.tabs[strip.tab].items : []; Option {} } }
-            Row { visible: strip.shelf.length > 0; spacing: 8
-                Text { text: "Add"; color: Qt.rgba(1, 1, 1, 0.6); font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+            // (a Flow, not a Row: with the tile widgets the shelf grew past the strip's edge, 2026-09-23)
+            Flow { visible: strip.shelf.length > 0; width: parent.width; spacing: 8
+                Text { text: "Add"; color: Qt.rgba(1, 1, 1, 0.6); font.pixelSize: 12; height: 27; verticalAlignment: Text.AlignVCenter }
                 Repeater { model: strip.shelf
                     Rectangle { id: sc; required property string modelData; height: 27; width: sct.implicitWidth + 40; radius: 13.5; color: Qt.rgba(1, 1, 1, sch.hovered ? 0.12 : 0.04); border.width: 1; border.color: Qt.rgba(1, 1, 1, 0.35)
                         Text { id: sct; x: 12; anchors.verticalCenter: parent.verticalCenter; text: Config.barWidgetNames[sc.modelData] || sc.modelData; color: "white"; font.pixelSize: 12 }

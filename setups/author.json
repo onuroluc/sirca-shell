@@ -15,6 +15,7 @@
       "bell",
       "gear"
     ],
+    "barTintAlpha": 0.5,
     "dockWidthMode": "fit"
   }
 }

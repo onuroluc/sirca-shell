@@ -17,6 +17,6 @@ MARK="$P/styles/darkly6.so.glass-marker"
 if [ ! -f "$MARK" ]; then if [ -f "$P/styles/darkly6.so" ]; then echo stock > "$MARK"; cp "$P/styles/darkly6.so" "$P/styles/darkly6.so.orig-glass"; else echo none > "$MARK"; fi; fi
 mkdir -p "$P/styles" "$P/org.kde.kdecoration3"
 install -m 755 "$SRC/darkly6.so" "$P/styles/darkly6.so"
-install -m 755 "$SRC/org.kde.glass18.so" "$P/org.kde.kdecoration3/org.kde.glass18.so"
+install -m 755 "$SRC/org.kde.glass19.so" "$P/org.kde.kdecoration3/org.kde.glass19.so"
 # older builds stay until KWin is restarted (the running KWin may still have one loaded); harmless files
 echo "installed. Now run (as yourself):  $(dirname "$0")/use_decoration.sh glass"
