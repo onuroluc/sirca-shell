@@ -74,6 +74,8 @@ void BlurSettings::read()
     general.excludeTooltips = BlurConfig::excludeTooltips();
     general.excludeMenus = BlurConfig::excludeMenus();
     general.excludeOSD = BlurConfig::excludeOSD();
+    general.qualityTier = std::clamp(BlurConfig::qualityTier(), 0, 2);
+    general.reduceOnBattery = BlurConfig::reduceOnBattery();
 
     forceBlur.windowClasses = parseWindowClasses(BlurConfig::windowClasses());
     forceBlur.forceClasses = BlurConfig::forceBlurClasses().split(QRegularExpression(QStringLiteral("[,;\\s]+")), Qt::SkipEmptyParts);

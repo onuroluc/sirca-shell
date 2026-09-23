@@ -102,10 +102,21 @@ void BlurEffectConfig::save()
                                          QStringLiteral("/Effects"),
                                          QDBusConnection::sessionBus());
 
-    if (QGuiApplication::platformName() == QStringLiteral("xcb")) {
-        interface.reconfigureEffect(QStringLiteral("glass_x11"));
-    } else {
-        interface.reconfigureEffect(QStringLiteral("glass"));
+    // The effect may be installed under another plugin id than "glass" (a development build is renamed so KWin picks
+    // up the new .so, and the X11 build is glass_x11): reconfigure every loaded glass* effect, and fall back to the
+    // platform's default name when the list cannot be read.
+    QStringList targets;
+    const QStringList loaded = interface.loadedEffects();
+    for (const QString &name : loaded) {
+        if (name.startsWith(QLatin1String("glass")) && !name.startsWith(QLatin1String("glasskey"))) {
+            targets << name;
+        }
+    }
+    if (targets.isEmpty()) {
+        targets << (QGuiApplication::platformName() == QStringLiteral("xcb") ? QStringLiteral("glass_x11") : QStringLiteral("glass"));
+    }
+    for (const QString &name : std::as_const(targets)) {
+        interface.reconfigureEffect(name);
     }
 }
 

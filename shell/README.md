@@ -107,6 +107,12 @@ empty file is the default look. A few keys:
 | `welcomed` | `true` once the first-run card has been closed |
 | `trayHidden` | list of tray item ids or titles to keep out of the bar, e.g. `["polychromatic-tray-applet"]` |
 | `recordSound` `levelMeter` `quietWhenBusy` `showFps` | behaviour switches |
+| `dockDodgeMode` `dockTintAlphaTouched` | which windows make the dock leave: `all`, `active` (the focused one), `maximized`; the denser tint (0.85) while a window lies over a dock that stays |
+| `weather` `weatherLocation` `weatherUnits` | off by default. On, the clock popup gets a weather card and the bar a `weather` widget (Open-Meteo, no key; one request every 30 min while on, cached in `~/.cache/sirca-shell/weather.json`). `weatherLocation`: `{"lat": 41.0, "lon": 29.0, "name": "Istanbul"}`; without it GeoClue is asked once. Units `c` or `f` |
+| `disks` (a bar widget) | removable drives: a lobe with every USB stick / card / external disc, Open (mounts first) and Eject / Unmount, from UDisks2 over D-Bus |
+| `levelMeterStyle` | `bars` (the four peak bars) or `spectrum`: 32 bands from a PipeWire capture of the sink's monitor plus an FFT, only while music plays and the bar is on screen (one extra capture node then, ~25 small FFTs a second) |
+| `lyrics` | off by default. On, the now-playing lobe looks the track up on LRCLIB (lrclib.net, no key) while it is open and shows synced lines that follow the player (a click seeks) or the plain text; answers are cached per track in `~/.cache/sirca-shell/lyrics/` |
+| `calendarDirs` | folders of `.ics` files for the clock popup (default: `~/.local/share/sirca-shell/calendars` plus khal / vdirsyncer stores that exist); dots on the days, the picked day's events, the next one under the clock. Nothing leaves the machine |
 
 ## Sharing a setup
 
@@ -162,4 +168,5 @@ GPL-3.0-or-later, see `LICENSE`.
 - `applets/` holds forks of KDE Plasma's system tray and notifications applets (KDE contributors; LGPL-2.0-or-later and
   GPL-2.0-or-later, headers kept in the files).
 - The glass itself is drawn by a fork of **kwin-effects-glass** by 4v3ngR.
+- The emoji list (`qml/data/emoji.json`) is built from Unicode's `emoji-test.txt` (© Unicode, Inc., Unicode License v3) by `scripts/gen-emoji.py`.
 - Built on Qt, KDE Frameworks, libplasma and LayerShellQt.

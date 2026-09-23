@@ -7,6 +7,7 @@
 #include <PlasmaQuick/AppletQuickItem>
 #include <QDebug>
 #include <QGuiApplication>
+#include <QQuickWindow>
 #include <QScreen>
 
 static ShellCorona *s_self = nullptr;
@@ -50,6 +51,12 @@ ShellCorona::ShellCorona(QObject *parent) : Plasma::Corona(parent)
 
 QRect ShellCorona::screenGeometry(int) const
 {
+    // the screen a hosted applet's window is on, when one is mapped (the bar or a lobe may live on a secondary screen);
+    // the primary screen otherwise
+    for (Plasma::Containment *c : containments())
+        for (Plasma::Applet *a : c->applets())
+            if (QQuickItem *item = PlasmaQuick::AppletQuickItem::itemForApplet(a))
+                if (item->window() && item->window()->screen()) return item->window()->screen()->geometry();
     return QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen()->geometry() : QRect();
 }
 

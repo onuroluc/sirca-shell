@@ -8,11 +8,13 @@ P="$(qtpaths6 --plugin-dir 2>/dev/null || qmake6 -query QT_INSTALL_PLUGINS 2>/de
 [ -d "$P" ] || P=/usr/lib/x86_64-linux-gnu/qt6/plugins
 [ -d "$P" ] || { echo "Qt 6 plugin folder not found (qtpaths6 / qmake6 missing?)"; exit 1; }
 if [ "${1:-}" = "--undo" ]; then
-  [ -f "$P/styles/darkly6.so.orig-glass" ] && mv "$P/styles/darkly6.so.orig-glass" "$P/styles/darkly6.so"
+  if [ -f "$P/styles/darkly6.so.orig-glass" ]; then mv "$P/styles/darkly6.so.orig-glass" "$P/styles/darkly6.so"; elif [ "$(cat "$P/styles/darkly6.so.glass-marker" 2>/dev/null)" = none ]; then rm -f "$P/styles/darkly6.so"; fi; rm -f "$P/styles/darkly6.so.glass-marker"
   rm -f "$P/org.kde.kdecoration3/"org.kde.glass*.so; echo "undone (switch the decoration back with tools/use_decoration.sh darkly)"; exit 0
 fi
 # the stock Darkly style is kept if it is there; without it there is nothing to keep (Fedora, Arch: Darkly is not a default package)
-[ -f "$P/styles/darkly6.so.orig-glass" ] || { [ -f "$P/styles/darkly6.so" ] && cp "$P/styles/darkly6.so" "$P/styles/darkly6.so.orig-glass"; } || true
+# Was there a stock Darkly before US? Recorded once (issue: a second run found our own darkly6.so and kept it as the "original")
+MARK="$P/styles/darkly6.so.glass-marker"
+if [ ! -f "$MARK" ]; then if [ -f "$P/styles/darkly6.so" ]; then echo stock > "$MARK"; cp "$P/styles/darkly6.so" "$P/styles/darkly6.so.orig-glass"; else echo none > "$MARK"; fi; fi
 mkdir -p "$P/styles" "$P/org.kde.kdecoration3"
 install -m 755 "$SRC/darkly6.so" "$P/styles/darkly6.so"
 install -m 755 "$SRC/org.kde.glass18.so" "$P/org.kde.kdecoration3/org.kde.glass18.so"

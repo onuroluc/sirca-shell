@@ -9,6 +9,7 @@ set -uo pipefail
 qdbus6() { if type -P qdbus6 >/dev/null 2>&1; then command qdbus6 "$@"; else qdbus-qt6 "$@"; fi; }
 export -f qdbus6
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+[ "$(id -u)" = 0 ] && [ "${SIRCA_ALLOW_ROOT:-0}" != 1 ] && { echo "Run this as your own user, not root: sudo is asked for where it is needed."; exit 1; }
 DRY=0; YES=0; PRESET=""; PARTS=""
 while [ $# -gt 0 ]; do case "$1" in --dry-run) DRY=1 ;; --yes|-y) YES=1 ;; --preset) PRESET="${2:-}"; shift ;; --parts) PARTS="${2:-}"; shift ;; -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;; *) echo "unknown option: $1"; exit 2 ;; esac; shift; done
 STATE="$HOME/.local/state/sirca-shell"; mkdir -p "$STATE"; LOG="$STATE/install-$(date +%Y%m%d-%H%M%S).log"
@@ -51,6 +52,7 @@ case "$PV" in 6.6*) ok "KDE Plasma $PV" ;; 6.7*) warn "KDE Plasma $PV: built and
 pgrep -x kwin_wayland >/dev/null 2>&1 && ok "KWin is the compositor" || { bad "kwin_wayland is not running. Other compositors (Hyprland, Sway, GNOME) are not supported."; FATAL=1; }
 for t in cmake g++ git python3; do have $t || { bad "missing: $t"; FATAL=1; }; done
 [ $FATAL = 0 ] && ok "build tools: cmake, g++, python3"
+case ":$PATH:" in *":$HOME/.local/bin:"*) ok "~/.local/bin is on your PATH" ;; *) warn "~/.local/bin is not on your PATH: the shell's commands (sirca-shell-switch, glass-mode) are installed there. Add it to your shell profile and log in again, or call them with the full path." ;; esac
 # KDE's shared CMake modules (issue #3, patch by leissa): the shell, the KWin effect and the Qt style all begin with
 # find_package(ECM); without it all three stop at "Could not find ECM" before a file is compiled.
 ECM_OK=0
@@ -145,8 +147,8 @@ NEED_SUDO=$(( ON[effect] + ON[qt] ))
 [ $DRY = 1 ] || printf '%s\n' "$ROOT" > "$STATE/root.txt"                                           # the shell's "Update now" and update.sh read this
 [ $DRY = 1 ] || { for k in shell effect look mode lock qt setup; do [ "${ON[$k]:-0}" = 1 ] && printf '%s ' "$k"; done; echo; } > "$STATE/parts.txt"   # what was chosen, re-used by update.sh
 [ $NEED_SUDO -gt 0 ] && say "  ${B}sudo will be asked for${N} by: $([ ${ON[effect]} = 1 ] && printf 'the KWin effect  ')$([ ${ON[qt]} = 1 ] && printf 'the Qt style and decoration')"
-if ! UPDATE_CHECK=0; [ $YES = 1 ] || { ask "Let the shell check GitHub once a day for a new version, and offer to update? (one small request to api.github.com; nothing else is sent)" n && UPDATE_CHECK=1; }
-ask "Install now?" y; then say "Nothing was changed."; exit 0; fi
+UPDATE_CHECK=0; [ $YES = 1 ] || { ask "Let the shell check GitHub once a day for a new version, and offer to update? (one small request to api.github.com; nothing else is sent)" n && UPDATE_CHECK=1; }
+if ! ask "Install now?" y; then say "Nothing was changed."; exit 0; fi
 
 # ------------------------------------------------------------------------------------------------ 6. install
 head_ "5. Installing   ${D}(log: $LOG)${N}"
@@ -159,21 +161,21 @@ i_effect() {
     say "  ${B}sudo:${N} copying the effect plugins into KWin's plugin folder"
     run "install the KWin effect (sudo)" sudo cmake --install "$ROOT/kwin-effects/build" || return 1
     [ $DRY = 1 ] || cp "$ROOT/kwin-effects/build/install_manifest.txt" "$STATE/effect-manifest.txt" 2>/dev/null
-    run "switch KWin's own blur off, the glass effect on" bash -c 'kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled false; kwriteconfig6 --file kwinrc --group Plugins --key glassEnabled true; kwriteconfig6 --file kwinrc --group Plugins --key glasskeyEnabled true; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect blur >/dev/null; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect glass >/dev/null; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect glasskey >/dev/null; true'; }
+    run "switch KWin's own blur off, the glass effect on" bash -c '[ -f "$1/blur-was.txt" ] || kreadconfig6 --file kwinrc --group Plugins --key blurEnabled --default true > "$1/blur-was.txt"; kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled false; kwriteconfig6 --file kwinrc --group Plugins --key glassEnabled true; kwriteconfig6 --file kwinrc --group Plugins --key glasskeyEnabled true; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect blur >/dev/null; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect glass >/dev/null; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect glasskey >/dev/null; true' _ "$STATE"; }
 i_look() { run "KDE colour scheme and GTK look (backups in ~/.local/state/glass-desktop)" "$ROOT/desktop/tools/apply_all.sh" apply; }
 i_mode() {
     if [ "$HAVE_PAPIRUS" = 0 ]; then
         # Papirus's installer downloads with wget; some minimal systems only have curl. Either does here.
-        run "Papirus icon theme into ~/.local/share/icons (no root; the official installer, about 200 MB)" bash -c 'set -e; command -v wget >/dev/null || command -v curl >/dev/null || { echo "neither wget nor curl is installed"; exit 1; }; mkdir -p "$HOME/.local/share/icons"; T=$(mktemp -d); cd "$T"; url=https://github.com/PapirusDevelopmentTeam/papirus-icon-theme/archive/refs/heads/master.tar.gz; if command -v wget >/dev/null; then wget -qO papirus.tar.gz "$url"; else curl -fsSL -o papirus.tar.gz "$url"; fi; tar -xzf papirus.tar.gz; for t in Papirus Papirus-Dark Papirus-Light; do rm -rf "$HOME/.local/share/icons/$t"; cp -r papirus-icon-theme-master/$t "$HOME/.local/share/icons/"; done; cd /; rm -rf "$T"; gtk-update-icon-cache -q "$HOME/.local/share/icons/Papirus" 2>/dev/null || true' || return 1
+        run "Papirus icon theme into ~/.local/share/icons (no root, about 200 MB, release 20260801)" bash -c 'set -e; command -v wget >/dev/null || command -v curl >/dev/null || { echo "neither wget nor curl is installed"; exit 1; }; mkdir -p "$HOME/.local/share/icons"; T=$(mktemp -d); cd "$T"; ver=20260801; url=https://github.com/PapirusDevelopmentTeam/papirus-icon-theme/archive/refs/tags/$ver.tar.gz; if command -v wget >/dev/null; then wget -qO papirus.tar.gz "$url"; else curl -fsSL -o papirus.tar.gz "$url"; fi; tar -xzf papirus.tar.gz; for t in Papirus Papirus-Dark Papirus-Light; do [ -d "$HOME/.local/share/icons/$t" ] && continue; cp -r papirus-icon-theme-$ver/$t "$HOME/.local/share/icons/"; echo "$t" >> "$1/papirus-added.txt"; done; cd /; rm -rf "$T"; gtk-update-icon-cache -q "$HOME/.local/share/icons/Papirus" 2>/dev/null || true' _ "$STATE" || return 1
     fi
-    run "bundled wallpapers to ~/.local/share/wallpapers/sirca" bash -c 'mkdir -p "$HOME/.local/share/wallpapers/sirca" && cp -n "$0"/wallpapers/*.jpg "$HOME/.local/share/wallpapers/sirca/"' "$ROOT" || return 1
+    run "bundled wallpapers to ~/.local/share/wallpapers/sirca" bash -c 'mkdir -p "$HOME/.local/share/wallpapers/sirca" && for w in "$0"/wallpapers/*.jpg; do [ -e "$HOME/.local/share/wallpapers/sirca/$(basename "$w")" ] || cp "$w" "$HOME/.local/share/wallpapers/sirca/"; done' "$ROOT" || return 1
     run "glass-mode and its helpers on your PATH (links into this folder: keep it)" bash -c 'mkdir -p "$HOME/.local/bin" && ln -sfn "$0/desktop/tools/mode.sh" "$HOME/.local/bin/glass-mode" && ln -sfn "$0/desktop/tools/lock_state.sh" "$HOME/.local/bin/glass-lock-sync" && ln -sfn "$0/desktop/tools/folder_color.sh" "$HOME/.local/bin/glass-folder-color"' "$ROOT" || return 1
     run "seven colour themes in the shell's config (kept if you already have themes)" python3 "$ROOT/setups/write_themes.py" "$HOME/.local/share/wallpapers/sirca" || return 1
     # The icon theme itself. glass-mode only switches BETWEEN Papirus variants (and colours the folders) when a Papirus
     # theme is already in use, so on a fresh system nothing ever selected it: the bar and dock kept drawing Breeze's icons.
     run "icon theme: Papirus-Dark (your previous choice is kept in $STATE/icon-theme.txt)" bash -c 'cur=$(kreadconfig6 --file kdeglobals --group Icons --key Theme); [ -f "$0/icon-theme.txt" ] || echo "${cur:-breeze}" > "$0/icon-theme.txt"; case "$cur" in Papirus*|Glass-Papirus*) exit 0;; esac; t=Papirus-Dark; [ "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(\"mode\",\"dark\"))" "$HOME/.config/sirca-shell/config.json" 2>/dev/null)" = light ] && t=Papirus; for h in /usr/lib/x86_64-linux-gnu/libexec/plasma-changeicons /usr/lib/libexec/plasma-changeicons /usr/libexec/plasma-changeicons /usr/lib64/libexec/plasma-changeicons; do [ -x "$h" ] && { "$h" "$t" >/dev/null 2>&1 && exit 0; }; done; kwriteconfig6 --file kdeglobals --group Icons --key Theme "$t"' "$STATE"
     # and the colour theme once, so the folder icons wear the accent from the start (glass-mode derives Glass-Papirus-<colour>)
-    run "apply the colour theme once (folder icons in the theme colour)" bash -c '"$HOME/.local/bin/glass-mode" theme "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(\"theme\",\"blue\"))" "$HOME/.config/sirca-shell/config.json" 2>/dev/null || echo blue)" >/dev/null 2>&1 || true'; }
+    run "apply the colour theme once (folder icons in the theme colour)" bash -c 'GLASS_NO_EXTRAS=1 "$HOME/.local/bin/glass-mode" theme "$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get(\"theme\",\"blue\"))" "$HOME/.config/sirca-shell/config.json" 2>/dev/null || echo blue)" >/dev/null 2>&1 || true'; }
 i_lock() { run "lock screen (active from the next login)" "$ROOT/desktop/tools/install_lock.sh"; }
 i_qt() {
     run "configure the Qt style and decoration" cmake -S "$ROOT/desktop/qt/darkly-fork" -B "$ROOT/desktop/qt/darkly-fork/build" -DCMAKE_BUILD_TYPE=Release -DBUILD_QT5=OFF || return 1
@@ -181,7 +183,9 @@ i_qt() {
     run "stage the built plugins" bash -c 'mkdir -p "$0/desktop/build" && cp "$0"/desktop/qt/darkly-fork/build/bin/darkly6.so "$0"/desktop/qt/darkly-fork/build/bin/org.kde.glass*.so "$0/desktop/build/"' "$ROOT" || return 1
     say "  ${B}sudo:${N} installing the style and decoration plugins (the stock Darkly plugin is kept as darkly6.so.orig-glass)"
     run "install the Qt style and decoration (sudo)" sudo "$ROOT/desktop/tools/install_qt.sh" || return 1
-    run "use the glass window decoration" "$ROOT/desktop/tools/use_decoration.sh" glass; }
+    run "use the glass window decoration" "$ROOT/desktop/tools/use_decoration.sh" glass
+    # the style is only a file until it is SELECTED (the author's machine already had Darkly selected, so this was missed)
+    run "select the Darkly widget style (your previous style is kept in $STATE/widget-style.txt)" bash -c 'cur=$(kreadconfig6 --file kdeglobals --group KDE --key widgetStyle); [ -f "$0/widget-style.txt" ] || echo "${cur:-breeze}" > "$0/widget-style.txt"; kwriteconfig6 --file kdeglobals --group KDE --key widgetStyle Darkly; mkdir -p "$HOME/.local/share/kstyle/themes"; cp "$1/desktop/qt/darkly-fork/kstyle/darkly.themerc" "$HOME/.local/share/kstyle/themes/"; qdbus6 org.kde.KGlobalSettings /KGlobalSettings org.kde.KGlobalSettings.notifyChange 2 0 >/dev/null 2>&1 || true' "$STATE" "$ROOT"; }
 i_updatecheck() { [ "${UPDATE_CHECK:-0}" = 1 ] || return 0; run "update check on (config updateCheck)" python3 - <<'PY'
 import json, os
 p = os.path.expanduser("~/.config/sirca-shell/config.json")

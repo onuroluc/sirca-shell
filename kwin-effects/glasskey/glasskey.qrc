@@ -1,6 +1,6 @@
 <!DOCTYPE RCC><RCC version="1.0">
-<qresource prefix="/effects/glasskey/">
-  <file>glasskey.frag</file>
-  <file>glasskey_core.frag</file>
+<qresource prefix="/effects/glasskey-lobes/">
+  <file>generated/glasskey.frag</file>
+  <file>generated/glasskey_core.frag</file>
 </qresource>
 </RCC>

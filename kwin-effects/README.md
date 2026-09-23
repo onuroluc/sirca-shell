@@ -231,6 +231,14 @@ This effect will conflict with the stock blur effect and any other forks of it.
 3. Disable any blur effects.
 4. Enable the *Glass* effect.
 
+### Tweaking the shaders without a rebuild
+
+The effect reads a shader from `~/.local/share/glass-effect/shaders/<plugin file name>/` before its embedded copy: for
+`glass.so` that is `.../shaders/glass/onscreen_rounded.frag`, for a numbered build `glass19.so` it is `.../shaders/glass19/`.
+The folder is per build on purpose: the uniforms change between builds, and a shader left over from an older build would
+silently break a newer one. Unload and load the effect (`qdbus6 org.kde.KWin /Effects unloadEffect glass` / `loadEffect glass`)
+after every edit; the journal logs which file was used (`glass: shader override ...`).
+
 ### Window transparency
 The window needs to be translucent in order for the blur to be visible. This can be done in multiple ways:
 - Use a transparent theme for the program if it supports it

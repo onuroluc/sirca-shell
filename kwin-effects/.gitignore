@@ -3,3 +3,4 @@ result*
 cmake-build-debug
 build
 src/generated
+glasskey/generated

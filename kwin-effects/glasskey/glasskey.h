@@ -33,6 +33,7 @@ private:
     void forget(EffectWindow *w);
     void pushUniforms();
     std::unique_ptr<GLShader> m_shader;
+    struct { int shadowStrength = -1, texSizePx = -1, contentPx = -1, contentRadius = -1; } m_loc;   // per-frame uniforms
     QList<EffectWindow *> m_windows;
     QSet<EffectWindow *> m_followed;
     QStringList m_classes;

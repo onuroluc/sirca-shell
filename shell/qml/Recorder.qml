@@ -26,7 +26,7 @@ QtObject {
 
     property var helper: RecorderProcess {
         onFinished: code => { const wasStopping = rec.finishing; rec.recording = false; rec.finishing = false; tick.stop()
-            if (code !== 0) { Screenshot.discardIfEmpty(rec.file); Shell.notify("Recording failed", code === -2 ? "gpu-screen-recorder is not installed" : "The recorder stopped with an error (code " + code + "); see the journal", ""); return }
+            if (code !== 0) { Screenshot.discardIfEmpty(rec.file); Shell.notify("Recording failed", code === -2 ? "gpu-screen-recorder is not installed" : code === -3 ? "ffmpeg is not installed (the HDR recording is kept next to the file)" : "The recorder stopped with an error (code " + code + "); see the journal", ""); return }
             Shell.notify(wasStopping ? "Recording saved" : "Recording ended", rec.clock + "  ·  " + rec.file.substring(rec.file.lastIndexOf("/") + 1), "", rec.file) } }
     property var _tick: Timer { id: tick; interval: 1000; repeat: true; onTriggered: rec.seconds++ }
 }

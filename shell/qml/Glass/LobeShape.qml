@@ -22,6 +22,24 @@ Item {
     readonly property var built: build(bar, lobes, flip, fillet)          // one pass per change, shared by the path and the polygon
     readonly property string pathData: built.svg
     readonly property var polygon: built.poly
+    // ---- how big the offscreen layers are. The shadow (two layered sources and a blur) used to fill this whole item: on
+    // the dock that is the screen's width, on the full-screen overlays 5120x1440, three times over, for a panel a fraction
+    // of that size. They now cover the outline's bounding box plus the shadow's reach, on whole pixels. `reach` (optional)
+    // is the outline the shape can grow INTO: the surface's fully grown mask polygon (points) or a rect. With it an
+    // opening lobe does not resize the layers every frame (a layer that changes size is re-allocated, which is the one
+    // thing worse than a big one); without it the current outline is used (fine for a panel whose outline does not animate).
+    property var reach: null
+    readonly property int pad: Math.ceil(shadowReach * 1.5 + Math.abs(shadowOffsetY)) + 2
+    function boundsOf(v, b) {           // extend bounds b = [x0, y0, x1, y1] by a points array or a rect
+        if (!v) return b
+        if (v.length !== undefined) { for (let i = 0; i + 1 < v.length; i += 2) { b[0] = Math.min(b[0], v[i]); b[1] = Math.min(b[1], v[i + 1]); b[2] = Math.max(b[2], v[i]); b[3] = Math.max(b[3], v[i + 1]) } }
+        else if (v.width > 0) { b[0] = Math.min(b[0], v.x); b[1] = Math.min(b[1], v.y); b[2] = Math.max(b[2], v.x + v.width); b[3] = Math.max(b[3], v.y + v.height) }
+        return b }
+    readonly property rect layerRect: {
+        let b = boundsOf(built.poly, [Infinity, Infinity, -Infinity, -Infinity]); b = boundsOf(reach, b)   // the union: a bouncing lobe may overshoot the reach for a frame
+        if (!(b[0] < b[2])) return Qt.rect(0, 0, 1, 1)
+        const x = Math.max(0, Math.floor(b[0] - pad)), y = Math.max(0, Math.floor(b[1] - pad))
+        return Qt.rect(x, y, Math.max(1, Math.min(Math.ceil(width), Math.ceil(b[2] + pad)) - x), Math.max(1, Math.min(Math.ceil(height), Math.ceil(b[3] + pad)) - y)) }
 
     function arcPts(cx, cy, r, a0, a1, n, out) {   // sample an arc from angle a0 to a1 (radians, y down)
         for (let i = 1; i <= n; ++i) { const a = a0 + (a1 - a0) * i / n; out.push(cx + r * Math.cos(a), cy + r * Math.sin(a)); }
@@ -60,31 +78,33 @@ Item {
     }
 
     // shadow: the same outline, black, blurred — follows every lobe (KWin shadows cannot)
+    // (each layered item sits at layerRect; the Shape inside is shifted back by -layerRect.x/y so the path, which is in
+    // this item's coordinates, lands where it belongs. Mask and picture are the same size, so they line up pixel for pixel.)
     Item {
         id: shadowSource
-        anchors.fill: parent
+        x: root.layerRect.x; y: root.layerRect.y; width: root.layerRect.width; height: root.layerRect.height
         visible: false
         layer.enabled: true
-        Shape { anchors.fill: parent; preferredRendererType: Shape.CurveRenderer
+        Shape { x: -root.layerRect.x; y: -root.layerRect.y; width: root.width; height: root.height; preferredRendererType: Shape.CurveRenderer
             ShapePath { strokeWidth: -1; fillColor: "black"; PathSvg { path: root.pathData } } }
     }
     // The shadow is cut OUT under the shape itself. It used to lie under the whole glass as well: 55 % black beneath a 15 %
     // tint, so the bar was a dark slab that hid what is behind it ("the top bar is not transparent"), whatever the tint
     // setting said. A shadow belongs around the glass, not inside it.
     // How: the blur's own mask, inverted, with the UNSHIFTED outline; the blurred picture is the outline drawn lower by the
-    // offset. (Both are the full size of this item and padding is off, so mask and picture line up pixel for pixel. A
-    // masked layer around the old effect did nothing.)
+    // offset. (Both are the same size and padding is off, so mask and picture line up pixel for pixel. A
+    // masked layer around the old effect did nothing.) Both are the size of layerRect, see above.
     Item {
         id: shadowSourceLow
-        anchors.fill: parent
+        x: root.layerRect.x; y: root.layerRect.y; width: root.layerRect.width; height: root.layerRect.height
         visible: false
         layer.enabled: true
-        Shape { anchors.fill: parent; preferredRendererType: Shape.CurveRenderer; transform: Translate { y: root.shadowOffsetY }
+        Shape { x: -root.layerRect.x; y: -root.layerRect.y; width: root.width; height: root.height; preferredRendererType: Shape.CurveRenderer; transform: Translate { y: root.shadowOffsetY }
             ShapePath { strokeWidth: -1; fillColor: "black"; PathSvg { path: root.pathData } } }
     }
     MultiEffect {
         z: -1
-        anchors.fill: parent
+        x: root.layerRect.x; y: root.layerRect.y; width: root.layerRect.width; height: root.layerRect.height
         source: shadowSourceLow
         autoPaddingEnabled: false
         blurEnabled: true; blur: 1.0; blurMax: root.shadowReach * 1.5

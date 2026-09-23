@@ -1,0 +1,7 @@
+{
+    "label": "Uptime",
+    "icon": "chronometer-symbolic",
+    "exec": "uptime.sh",
+    "interval": 30,
+    "click": "xdg-open /proc/uptime"
+}

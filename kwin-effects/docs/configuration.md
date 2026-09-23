@@ -19,6 +19,15 @@ These sliders control the blur and noise applied to docks and panels.
 
 If the content and decoration blur/noise values match, the effect uses a single blur pass to avoid visible seams between the content and decoration regions.
 
+### Quality tier
+Trades looks for GPU time. *Full* is the effect as configured. *Reduced* caps the blur pyramid at two levels and turns noise
+and refraction off. *Minimal* blurs with a single level. Stored as `QualityTier` (0, 1, 2) in the `[Effect-blurplus]`
+group of `kwinrc`.
+
+### Use at least the reduced tier on battery
+While UPower reports the machine as running on battery, the effect runs at the reduced tier (or the configured one if that
+is lower already). Stored as `ReduceOnBattery`. Without UPower on the system bus nothing changes.
+
 # Force blur
 ### Apply effects to window decorations as well
 Whether to apply the glass effect to window decorations, including borders. Enable this if your window decoration doesn't support blur, or you want rounded top corners.
@@ -34,26 +43,3 @@ When enabled, corners that touch the edge of another window are flattened.
 
 The exclude options keep the configured corner radius for docks, tooltips, or menus instead of dynamically flattening those window types.
 
-# Static blur
-When enabled, the blur texture will be cached and reused. The blurred areas of the window will be marked as opaque, resulting in KWin not painting anything behind them.
-Only one image per screen is cached at a time.
-
-Static blur is mainly intended for laptop users who want longer battery life while still having blur everywhere.
-
-### Use real blur for windows that are in front of other windows
-By default, when two windows overlap, you won't be able to see the window behind.
-![image](https://github.com/taj-ny/kwin-effects-glass/assets/79316397/e581b5c1-7b2c-41c4-b180-4da5306747e1)
-
-If this option is enabled, the effect will automatically switch to real blur when necessary. At very high blur strengths, there may be a slight difference in the texture.
-
-https://github.com/taj-ny/kwin-effects-glass/assets/79316397/7bae6a16-6c78-4889-8df1-feb24005dabc
-
-### Image source
-The image to use for static blur.
-
-- Desktop wallpaper - A screenshot of the desktop is taken for every screen. Icons and widgets will be included. The cached texture is invalidated when the entire desktop is repainted,
-which can happen when the wallpaper changes, icons are interacted with or when widgets update.
-- Custom - The specified image is scaled for every screen without respecting the aspect ratio. Supported formats are JPEG and PNG.
-
-### Blur image
-Whether to blur the image used for static blur. This is only done once.

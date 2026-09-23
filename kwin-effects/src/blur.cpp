@@ -8,6 +8,9 @@
 
 #include "blur.h"
 #include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
 #include <QDBusVariant>
 #include <QStandardPaths>
 #include <QDebug>
@@ -46,7 +49,12 @@
 #endif
 
 #if KWIN_BUILD_X11
+#include "utils/c_ptr.h"
+
+#include <QFileInfo>
+#include <dlfcn.h>
 #include "utils/xcbutils.h"
+#include "x11window.h"
 #endif
 
 #include <QGuiApplication>
@@ -75,19 +83,57 @@ static void ensureResources()
 namespace KWin
 {
 
-// Shader sources: a copy under $XDG_DATA_HOME/glass-effect/shaders/ (see README) overrides the embedded one, so shader
-// work needs only an effect unload/load. Embedded resources use a per-build prefix because KWin never dlcloses old
-// plugin builds and the first-registered ":/effects/glass/..." resource would otherwise shadow every later build.
+// Shader sources: a copy under $XDG_DATA_HOME/glass-effect/shaders/<plugin file name>/ (glass19/ for glass19.so, see
+// README) overrides the embedded one, so shader work needs only an effect unload/load. The folder is PER BUILD: a flat
+// folder poisoned the next build on 2026-09-23 (its stale noise.frag knew no noiseScale and drew the raw noise texture
+// at full strength: "static" over the whole desktop), and the shader/uniform contract changes between builds.
+// Embedded resources use a per-build prefix because KWin never dlcloses old plugin builds and the first-registered
+// ":/effects/glass/..." resource would otherwise shadow every later build.
+static QString glassPluginName()
+{
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<const void *>(&glassPluginName), &info) && info.dli_fname) {
+        return QFileInfo(QString::fromLocal8Bit(info.dli_fname)).completeBaseName();
+    }
+    return QStringLiteral("glass");
+}
+
 static QString glassShaderPath(const char *name)
 {
-    const QString local = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QStringLiteral("glass-effect/shaders/") + QLatin1String(name));
+    static const QString plugin = glassPluginName();
+    const QString local = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QStringLiteral("glass-effect/shaders/") + plugin + QLatin1Char('/') + QLatin1String(name));
     if (!local.isEmpty()) {
+        qInfo("glass: shader override %s", qPrintable(local));
         return local;
     }
     return QStringLiteral(":/effects/glass-lobes/generated/") + QLatin1String(name);
 }
 
 static const QByteArray s_blurAtomName = QByteArrayLiteral("_KDE_NET_WM_BLUR_BEHIND_REGION");
+
+#if KWIN_BUILD_X11
+// A 32-bit CARDINAL window property of an X11 (or XWayland) client. Null when the window is not X11 or has no such
+// property, empty-but-not-null when it is set with no rects (the client asks for blur behind the whole window).
+static QByteArray readCardinalProperty(EffectWindow *w, xcb_atom_t atom)
+{
+#ifdef GLASS_KWIN_67
+    // 6.7 dropped EffectWindow::readProperty()
+    xcb_connection_t *connection = effects->xcbConnection();
+    const auto x11Window = qobject_cast<X11Window *>(w->window());
+    if (!connection || !x11Window) {
+        return QByteArray();
+    }
+    const xcb_get_property_cookie_t cookie = xcb_get_property(connection, 0, x11Window->window(), atom, XCB_ATOM_CARDINAL, 0, 8192);
+    UniqueCPtr<xcb_get_property_reply_t> reply(xcb_get_property_reply(connection, cookie, nullptr));
+    if (!reply || reply->type != XCB_ATOM_CARDINAL || reply->format != 32) {
+        return QByteArray();
+    }
+    return QByteArray(static_cast<const char *>(xcb_get_property_value(reply.get())), xcb_get_property_value_length(reply.get()));
+#else
+    return w->readProperty(atom, XCB_ATOM_CARDINAL, 32);
+#endif
+}
+#endif
 
 #if !defined(GLASS_X11) && !defined(GLASS_KWIN_67)
 BlurManagerInterface *BlurEffect::s_blurManager = nullptr;
@@ -168,6 +214,7 @@ BlurEffect::BlurEffect()
         m_roundedOnscreenPass.autoTintAlphaRangeLocation = m_roundedOnscreenPass.shader->uniformLocation("autoTintAlphaRange");
         m_roundedOnscreenPass.autoTintAlphaLocation = m_roundedOnscreenPass.shader->uniformLocation("autoTintAlpha");
         m_roundedOnscreenPass.glowColorLocation = m_roundedOnscreenPass.shader->uniformLocation("glowColor");
+        m_roundedOnscreenPass.rimColorLocation = m_roundedOnscreenPass.shader->uniformLocation("rimColor");
         m_roundedOnscreenPass.glowStrengthLocation = m_roundedOnscreenPass.shader->uniformLocation("glowStrength");
         m_roundedOnscreenPass.edgeLightingLocation = m_roundedOnscreenPass.shader->uniformLocation("edgeLighting");
         m_roundedOnscreenPass.lobeCountLocation = m_roundedOnscreenPass.shader->uniformLocation("lobeCount");
@@ -210,10 +257,12 @@ BlurEffect::BlurEffect()
     } else {
         m_noisePass.mvpMatrixLocation = m_noisePass.shader->uniformLocation("modelViewProjectionMatrix");
         m_noisePass.noiseTextureSizeLocation = m_noisePass.shader->uniformLocation("noiseTextureSize");
+        m_noisePass.noiseScaleLocation = m_noisePass.shader->uniformLocation("noiseScale");
     }
 
     initBlurStrengthValues();
     reconfigure(ReconfigureAll);
+    watchBattery();
 
 #if KWIN_BUILD_X11
     if (effects->xcbConnection()) {
@@ -356,8 +405,24 @@ void BlurEffect::initBlurStrengthValues()
 
 void BlurEffect::reconfigure(ReconfigureFlags flags)
 {
+    Q_UNUSED(flags)
     m_settings.read();
+    applySettings();
+}
 
+// QualityTier (kcfg), raised to at least "reduced" while on battery when ReduceOnBattery is set.
+int BlurEffect::effectiveQualityTier() const
+{
+    int tier = m_settings.general.qualityTier;
+    if (m_settings.general.reduceOnBattery && m_onBattery) {
+        tier = std::max(tier, 1);
+    }
+    return tier;
+}
+
+// Everything derived from m_settings (and from the battery state); also re-run when the quality tier changes.
+void BlurEffect::applySettings()
+{
     m_contentBlurSettings = pipelineSettingsForStrength(
         m_settings.general.blurStrength,
         m_settings.general.noiseStrength
@@ -370,6 +435,23 @@ void BlurEffect::reconfigure(ReconfigureFlags flags)
         m_settings.general.dockBlurStrength,
         m_settings.general.dockNoiseStrength
     );
+
+    // Quality tiers: 1 (reduced) caps the pyramid at two levels and drops noise and refraction, 2 (minimal) blurs with a
+    // single level. A capped pyramid keeps the offset within that level's artefact-free range (see initBlurStrengthValues).
+    const int tier = effectiveQualityTier();
+    if (tier >= 1) {
+        const size_t maxIterations = tier >= 2 ? 1 : 2;
+        for (BlurPipelineSettings *settings : {&m_contentBlurSettings, &m_decorationBlurSettings, &m_dockBlurSettings}) {
+            if (settings->iterationCount > maxIterations) {
+                settings->iterationCount = maxIterations;
+                settings->offset = std::min(settings->offset, blurOffsets[maxIterations - 1].maxOffset);
+                settings->expandSize = blurOffsets[maxIterations - 1].expandSize;
+            }
+            settings->noiseStrength = 0;
+        }
+    }
+    m_refractionStrength = tier >= 1 ? 0.0f : m_settings.refraction.refractionStrength;
+
     m_maxIterationCount = std::max({
         m_contentBlurSettings.iterationCount,
         m_decorationBlurSettings.iterationCount,
@@ -399,9 +481,93 @@ void BlurEffect::reconfigure(ReconfigureFlags flags)
 
     m_whitelist = (m_settings.forceBlur.windowClassMatchingMode == WindowClassMatchingMode::Whitelist);
     m_windowClasses = m_settings.forceBlur.windowClasses;
+    if (!m_whitelist) {
+        // always excluded (it used to be appended to a copy of the list per window per frame)
+        m_windowClasses << QStringLiteral("xwaylandvideobridge");
+    }
+    m_tintAlpha = QColor(m_settings.general.tintColor).alphaF();
+    m_glowAlpha = QColor(m_settings.general.glowColor).alphaF();
+    m_targetColors.description.reset(); // tint / glow may have changed: convert again on the next draw
+    setConstantUniforms();
 
     // Update all windows for the blur to take effect
     effects->addRepaintFull();
+}
+
+// Uniforms that only change with the configuration are set here, once, instead of per draw. A GL program keeps its
+// uniform values, so only the per-window ones remain in blur().
+void BlurEffect::setConstantUniforms()
+{
+    if (!m_roundedOnscreenPass.shader) {
+        return;
+    }
+    effects->makeOpenGLContextCurrent();
+    ShaderBinder binder(m_roundedOnscreenPass.shader.get());
+    GLShader *shader = m_roundedOnscreenPass.shader.get();
+    const QColor tint(m_settings.general.tintColor);
+    shader->setUniform(m_roundedOnscreenPass.colorMatrixLocation, m_colorMatrix);
+    shader->setUniform(m_roundedOnscreenPass.useOklabSaturationLocation, m_settings.general.oklabSaturation ? 1 : 0);
+    shader->setUniform(m_roundedOnscreenPass.saturationLocation, static_cast<float>(m_settings.general.saturation));
+    shader->setUniform(m_roundedOnscreenPass.texUnitLocation, 0);
+    shader->setUniform(m_roundedOnscreenPass.edgeSizePixelsLocation, m_settings.refraction.edgeSizePixels);
+    shader->setUniform(m_roundedOnscreenPass.refractionNormalPowLocation, m_settings.refraction.refractionNormalPow);
+    shader->setUniform(m_roundedOnscreenPass.refractionRGBFringingLocation, m_settings.refraction.refractionRGBFringing);
+    shader->setUniform(m_roundedOnscreenPass.refractionOffsetStrengthLocation, m_settings.refraction.refractionOffsetStrength);
+    shader->setUniform(m_roundedOnscreenPass.refractionBevelIntensityLocation, m_settings.refraction.refractionBevelIntensity);
+    shader->setUniform(m_roundedOnscreenPass.physicallyBasedRefractionLocation, m_settings.refraction.physicallyBased ? 1 : 0);
+    shader->setUniform(m_roundedOnscreenPass.tintGrayLocation, static_cast<float>(0.299 * tint.redF() + 0.587 * tint.greenF() + 0.114 * tint.blueF()));
+    shader->setUniform(m_roundedOnscreenPass.autoTintAlphaRangeLocation, QVector2D(m_settings.general.autoTintAlphaMin, m_settings.general.autoTintAlphaMax));
+    shader->setUniform(m_roundedOnscreenPass.autoTintAlphaLocation, m_settings.general.autoTintAlpha ? 1 : 0);
+}
+
+// UPower's OnBattery, read once and then followed through PropertiesChanged; no UPower (a desktop without it, no
+// system bus) leaves m_onBattery false. Both calls are asynchronous: the compositor thread must not wait on D-Bus.
+void BlurEffect::watchBattery()
+{
+    QDBusConnection bus = QDBusConnection::systemBus();
+    if (!bus.isConnected()) {
+        return;
+    }
+    const QString service = QStringLiteral("org.freedesktop.UPower");
+    const QString path = QStringLiteral("/org/freedesktop/UPower");
+    const QString properties = QStringLiteral("org.freedesktop.DBus.Properties");
+    bus.connect(service, path, properties, QStringLiteral("PropertiesChanged"),
+                this, SLOT(slotUPowerPropertiesChanged(QString, QVariantMap, QStringList)));
+
+    QDBusMessage get = QDBusMessage::createMethodCall(service, path, properties, QStringLiteral("Get"));
+    get << service << QStringLiteral("OnBattery");
+    auto *watcher = new QDBusPendingCallWatcher(bus.asyncCall(get), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *watcher) {
+        const QDBusPendingReply<QVariant> reply = *watcher;
+        watcher->deleteLater();
+        if (reply.isValid()) {
+            setOnBattery(reply.value().toBool());
+        }
+    });
+}
+
+void BlurEffect::slotUPowerPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated)
+{
+    if (interface != QLatin1String("org.freedesktop.UPower")) {
+        return;
+    }
+    if (const auto it = changed.constFind(QStringLiteral("OnBattery")); it != changed.constEnd()) {
+        setOnBattery(it->toBool());
+    } else if (invalidated.contains(QStringLiteral("OnBattery"))) {
+        watchBattery(); // re-read (the signal connection is a no-op the second time)
+    }
+}
+
+void BlurEffect::setOnBattery(bool onBattery)
+{
+    if (m_onBattery == onBattery) {
+        return;
+    }
+    const int before = effectiveQualityTier();
+    m_onBattery = onBattery;
+    if (effectiveQualityTier() != before) {
+        applySettings();
+    }
 }
 
 void BlurEffect::repaintDynamicCorners()
@@ -413,7 +579,8 @@ void BlurEffect::repaintDynamicCorners()
 
 BlurEffect::BlurPipelineSettings BlurEffect::pipelineSettingsForStrength(int blurStrength, int noiseStrength) const
 {
-    const BlurValuesStruct &values = blurStrengthValues[blurStrength];
+    // the kcfg has no range: a hand-edited kwinrc (0, or > 15) indexed past the table
+    const BlurValuesStruct &values = blurStrengthValues[std::clamp<qsizetype>(blurStrength, 0, blurStrengthValues.size() - 1)];
 
     return BlurPipelineSettings{
         .iterationCount = static_cast<size_t>(values.iteration),
@@ -430,9 +597,11 @@ void BlurEffect::updateBlurRegion(EffectWindow *w)
     std::optional<qreal> saturation;
     std::optional<qreal> contrast;
 
-#ifdef GLASS_X11
-    if (net_wm_blur_region != XCB_ATOM_NONE) {
-        const QByteArray value = w->readProperty(net_wm_blur_region, XCB_ATOM_CARDINAL, 32);
+#if KWIN_BUILD_X11
+    // XWayland clients too: an X11 app that asks for blur (a KDE X11 app, Spotify with the property set) does so through
+    // this window property, on the Wayland session as much as on X11. It used to be read in the X11 build only.
+    if (net_wm_blur_region != XCB_ATOM_NONE && effects->xcbConnection()) {
+        const QByteArray value = readCardinalProperty(w, net_wm_blur_region);
         BlurRegion region;
         if (value.size() > 0 && !(value.size() % (4 * sizeof(uint32_t)))) {
             const uint32_t *cardinals = reinterpret_cast<const uint32_t *>(value.constData());
@@ -526,6 +695,7 @@ void BlurEffect::updateBlurRegion(EffectWindow *w)
         BlurEffectData &data = m_windows[w];
         data.content = content;
         data.frame = frame;
+        data.lobeKey = lobeKeyFor(w);
         data.colorMatrix = colorTransformMatrix(saturation.value_or(1.0), contrast.value_or(1.0), 1.0);
 #if PLASMA_VERSION < 0x060404 || defined(GLASS_X11)
         data.windowEffect = ItemEffect(w->windowItem());
@@ -570,6 +740,21 @@ void BlurEffect::slotWindowAdded(EffectWindow *w)
                 updateBlurRegion(w);
             }
         });
+        // The declared radius is snapshotted at the first draw and then overridden with the effective one. When the
+        // window (or KWin, on a decoration change) declares a new radius later, take the new snapshot; our own
+        // setBorderRadius() write fires this signal too and is recognised by value.
+        windowBorderRadiusChangedConnections[w] = connect(w->window(), &Window::borderRadiusChanged, this, [this, w]() {
+            auto it = m_windows.find(w);
+            if (it == m_windows.end()) {
+                return;
+            }
+            const BorderRadius current = w->window()->borderRadius();
+            if (it->second.appliedCornerRadius.has_value() && current == *it->second.appliedCornerRadius) {
+                return;
+            }
+            it->second.originalCornerRadius = current;
+            w->addRepaintFull();
+        });
     }
 
     windowFrameGeometryChangedConnections[w] = connect(w, &EffectWindow::windowFrameGeometryChanged, this, [this,w]() {
@@ -612,6 +797,10 @@ void BlurEffect::slotWindowDeleted(EffectWindow *w)
     if (auto it = windowFrameGeometryChangedConnections.find(w); it != windowFrameGeometryChangedConnections.end()) {
         disconnect(*it);
         windowFrameGeometryChangedConnections.erase(it);
+    }
+    if (auto it = windowBorderRadiusChangedConnections.find(w); it != windowBorderRadiusChangedConnections.end()) {
+        disconnect(*it);
+        windowBorderRadiusChangedConnections.erase(it);
     }
     repaintDynamicCorners();
 }
@@ -1002,6 +1191,8 @@ void BlurEffect::prePaintWindow(EffectWindow *w, WindowPrePaintData &data, std::
 void BlurEffect::prePaintWindow(RenderView *view, EffectWindow *w, WindowPrePaintData &data)
 {
     effects->prePaintWindow(view, w, data);
+    // KWin 6.7's WindowPrePaintData carries no opaque region any more (occlusion is tracked per item), so the mask is
+    // the only handle: the window must not cull what its blur reads.
     if (!blurRegion(w).isEmpty()) {
         data.setTranslucent();
     }
@@ -1014,8 +1205,13 @@ void BlurEffect::prePaintWindow(RenderView *view, EffectWindow *w, WindowPrePain
     // hand-rolled deviceOpaque/devicePaint bookkeeping that used to live here let windows below
     // (e.g. a playing video) repaint over applet popups without the blur being re-run.
     effects->prePaintWindow(view, w, data, presentTime);
-    if (!blurRegion(w).isEmpty()) {
-        data.setTranslucent();
+    // The blur reads the pixels behind its area, so that area must not be culled by the window's own opaque region.
+    // Only that area is taken out: setTranslucent() dropped the WHOLE opaque region (and the scene ignores
+    // deviceOpaque entirely once PAINT_WINDOW_TRANSLUCENT is set), so an opaque window with a blurred title bar had
+    // everything behind its body repainted every frame too.
+    const BlurRegion region = blurRegion(w);
+    if (!region.isEmpty()) {
+        data.deviceOpaque -= view->mapToDeviceCoordinatesAligned(RectF(region.boundingRect()).translated(w->pos()));
     }
 }
 #endif
@@ -1034,14 +1230,7 @@ bool BlurEffect::shouldBlur(const EffectWindow *w, int mask, const WindowPaintDa
     const auto windowClass = w->window()->resourceClass();
     const auto resourceName = w->window()->resourceName();
 
-    auto classes = m_windowClasses;
-
-    // Add some apps to the exclusion list
-    if (!m_whitelist) {
-      classes << QString("xwaylandvideobridge");
-    }
-
-    const auto matches = classes.contains(windowClass) || classes.contains(resourceName);
+    const auto matches = m_windowClasses.contains(windowClass) || m_windowClasses.contains(resourceName);
 
     if ((m_whitelist && !matches) || (!m_whitelist && matches)) {
         return false;
@@ -1073,14 +1262,12 @@ void BlurEffect::drawWindow(const RenderTarget &renderTarget, const RenderViewpo
     effects->drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
 }
 
-GLTexture *BlurEffect::ensureNoiseTexture(int noiseStrength)
+// One texture of full-range random bytes; the per-draw noiseScale uniform applies the strength. (It used to be baked in
+// as rand() % strength, so content, decoration and dock noise with different strengths re-uploaded it in turn, per draw.)
+GLTexture *BlurEffect::ensureNoiseTexture()
 {
-    if (noiseStrength == 0) {
-        return nullptr;
-    }
-
     const qreal scale = std::max(1.0, QGuiApplication::primaryScreen()->logicalDotsPerInch() / 96.0);
-    if (!m_noisePass.noiseTexture || m_noisePass.noiseTextureScale != scale || m_noisePass.noiseTextureStength != noiseStrength) {
+    if (!m_noisePass.noiseTexture || m_noisePass.noiseTextureScale != scale) {
         // Init randomness based on time
         std::srand((uint)QTime::currentTime().msec());
 
@@ -1090,7 +1277,7 @@ GLTexture *BlurEffect::ensureNoiseTexture(int noiseStrength)
             uint8_t *noiseImageLine = (uint8_t *)noiseImage.scanLine(y);
 
             for (int x = 0; x < noiseImage.width(); x++) {
-                noiseImageLine[x] = std::rand() % noiseStrength;
+                noiseImageLine[x] = std::rand() % 256;
             }
         }
 
@@ -1103,10 +1290,27 @@ GLTexture *BlurEffect::ensureNoiseTexture(int noiseStrength)
         m_noisePass.noiseTexture->setFilter(GL_NEAREST);
         m_noisePass.noiseTexture->setWrapMode(GL_REPEAT);
         m_noisePass.noiseTextureScale = scale;
-        m_noisePass.noiseTextureStength = noiseStrength;
     }
 
     return m_noisePass.noiseTexture.get();
+}
+
+void BlurEffect::updateTargetColors(const std::shared_ptr<ColorDescription> &target)
+{
+    if (m_targetColors.description == target) {
+        return;
+    }
+    m_targetColors.description = target;
+    const auto toTarget = [&target](const QColor &c) {
+        return ColorDescription::sRGB->mapTo(QVector3D(c.redF(), c.greenF(), c.blueF()), *target, RenderingIntent::Perceptual);
+    };
+    m_targetColors.tint = toTarget(QColor(m_settings.general.tintColor));
+    m_targetColors.glow = toTarget(QColor(m_settings.general.glowColor));
+    m_targetColors.rim = toTarget(QColor(Qt::white));
+    // called with the on-screen shader bound; the program keeps these until the target or the settings change
+    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.tintColorLocation, m_targetColors.tint);
+    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.glowColorLocation, m_targetColors.glow);
+    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.rimColorLocation, m_targetColors.rim);
 }
 
 void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const BlurRegion &deviceRegion, WindowPaintData &data)
@@ -1162,6 +1366,11 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         (contentShape.isEmpty() && !frameShape.isEmpty()) ? m_decorationBlurSettings : contentBlurSettings;
     const bool splitBlurSettings = !frameShape.isEmpty() &&
         !contentShape.isEmpty();
+    // Content and decoration are drawn as two ranges (their tint and noise may differ), but the pyramid itself only
+    // depends on the iteration count and the offset: when those match, one pass feeds both draws.
+    const bool sharedPyramid = splitBlurSettings &&
+        contentBlurSettings.iterationCount == m_decorationBlurSettings.iterationCount &&
+        qFuzzyCompare(contentBlurSettings.offset, m_decorationBlurSettings.offset);
     const bool splitTintSettings = m_settings.general.excludeDecorations &&
         !frameShape.isEmpty() &&
         !contentShape.isEmpty();
@@ -1234,6 +1443,8 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
 
     // Maybe reallocate offscreen render targets. Keep in mind that the first one contains
     // original background behind the window, it's not blurred.
+    // TODO(audit 14, VRAM): every blurred window owns a full pyramid per output. A shared pool keyed by
+    // (size, format) with the per-window level-0 copy kept separately would cut VRAM roughly by the number of windows.
     GLenum textureFormat = GL_RGBA8;
     if (renderTarget.texture()) {
         textureFormat = renderTarget.texture()->internalFormat();
@@ -1273,6 +1484,9 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
     }
 
     // Fetch the pixels behind the shape that is going to be blurred.
+    // TODO(audit 3, damage-local pyramid): only the dirty part of level 0 is re-blitted, but the down/upsample passes
+    // below still run over the whole backgroundRect. Restricting them to the dirty rect grown by the kernel footprint
+    // (offset * 2^level per side) needs scissor + per-level dirty tracking; too big for this pass.
 #ifdef GLASS_X11
     const QRegion dirtyRegion = deviceRegion & backgroundRect;
     for (const QRect &dirtyRect : dirtyRegion) {
@@ -1451,15 +1665,15 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         return renderInfo.framebuffers[1]->colorAttachment();
     };
 
-    const QMatrix4x4 &colorMatrix = m_colorMatrix;
     const float modulation = opacity * opacity;
 
+    blurInfo.appliedCornerRadius = cornerRadius; // before the write: borderRadiusChanged fires synchronously
     w->window()->setBorderRadius(cornerRadius);
 
 
     ShaderManager::instance()->pushShader(m_roundedOnscreenPass.shader.get());
-    // rim / tint constants are converted to the output's encoding in the shader (see glassToTarget in glass.glsl)
-    m_roundedOnscreenPass.shader->setColorspaceUniforms(ColorDescription::sRGB, renderTarget.colorDescription(), RenderingIntent::Perceptual);
+    // rim / tint constants are sRGB; the shader wants them in the output's encoding (see glass.glsl)
+    updateTargetColors(renderTarget.colorDescription());
 
     QMatrix4x4 projectionMatrix = viewport.projectionMatrix();
     projectionMatrix.translate(scaledBackgroundRect.x(), scaledBackgroundRect.y());
@@ -1508,10 +1722,8 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
             !w->isPopupMenu() &&
             !w->isPopupWindow());
 
+    // the configuration-only uniforms were set in setConstantUniforms(); these depend on the window
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.mvpMatrixLocation, projectionMatrix);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.colorMatrixLocation, colorMatrix);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.useOklabSaturationLocation, m_settings.general.oklabSaturation ? 1 : 0);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.saturationLocation, static_cast<float>(m_settings.general.saturation));
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.halfpixelLocation, halfpixel);
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.offsetLocation, combinedBlurSettings.offset * m_upsampleOffset);
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.boxLocation, QVector4D(nativeBox.x() + nativeBox.width() * 0.5, nativeBox.y() + nativeBox.height() * 0.5, nativeBox.width() * 0.5, nativeBox.height() * 0.5));
@@ -1521,11 +1733,8 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         int lobeCount = 0;
         float lobeData[32] = {0};
         float lobeRadius = 0, lobeFillet = 0;
-        if (!m_lobeShapes.isEmpty() && w->isDock()) {
-            const QString cls = w->windowClass().section(QLatin1Char(' '), -1);
-            const QSize sz = w->frameGeometry().size().toSize();
-            const QString key = QStringLiteral("%1:%2x%3").arg(cls).arg(sz.width()).arg(sz.height());
-            const auto it = m_lobeShapes.constFind(key);
+        if (!m_lobeShapes.isEmpty() && !blurInfo.lobeKey.isEmpty()) {
+            const auto it = m_lobeShapes.constFind(blurInfo.lobeKey);
             if (it != m_lobeShapes.constEnd()) {
                 const qreal sc = viewport.scale();
                 const QPointF origin(w->frameGeometry().x() * sc - scaledBackgroundRect.x(), w->frameGeometry().y() * sc - scaledBackgroundRect.y());
@@ -1551,22 +1760,9 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.lobeFilletLocation, lobeFillet);
     }
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.opacityLocation, modulation);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.texUnitLocation, 0);
     m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.blurSizeLocation, QVector2D(nativeBox.width(), nativeBox.height()));
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.edgeSizePixelsLocation, m_settings.refraction.edgeSizePixels);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.refractionStrengthLocation, isRefractionExcluded ? 0.0f : m_settings.refraction.refractionStrength);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.refractionNormalPowLocation, m_settings.refraction.refractionNormalPow);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.refractionRGBFringingLocation, m_settings.refraction.refractionRGBFringing);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.refractionOffsetStrengthLocation, m_settings.refraction.refractionOffsetStrength);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.refractionBevelIntensityLocation, m_settings.refraction.refractionBevelIntensity);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.physicallyBasedRefractionLocation, m_settings.refraction.physicallyBased ? 1 : 0);
+    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.refractionStrengthLocation, isRefractionExcluded ? 0.0f : m_refractionStrength);
 
-    QColor tint(m_settings.general.tintColor);
-    QVector3D tintVec(tint.redF(), tint.greenF(), tint.blueF());
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.tintColorLocation, tintVec);
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.tintGrayLocation, static_cast<float>(0.299 * tint.redF() + 0.587 * tint.greenF() + 0.114 * tint.blueF()));
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.autoTintAlphaRangeLocation, QVector2D(m_settings.general.autoTintAlphaMin, m_settings.general.autoTintAlphaMax));
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.autoTintAlphaLocation, m_settings.general.autoTintAlpha ? 1 : 0);
     auto tintStrengthForRegion = [&](bool decorationRegion) {
         if (w->isDock() && m_settings.general.excludeDocks) {
             return 0.0f;
@@ -1585,12 +1781,9 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         if (decorationRegion && m_settings.general.excludeDecorations) {
             return 0.0f;
         }
-        return static_cast<float>(tint.alphaF());
+        return m_tintAlpha;
     };
 
-    QColor glow(m_settings.general.glowColor);
-    QVector3D glowVec(glow.redF(), glow.greenF(), glow.blueF());
-    m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.glowColorLocation, glowVec);
     // App windows (and their dialogs) carry their own single edge line from the window decoration; the glass outline here
     // would be a second, inner one. Shell surfaces, menus and popups keep it — it is their rim.
     const bool appWindow = w->isNormalWindow() || w->isDialog();
@@ -1598,7 +1791,7 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.glowStrengthLocation, 0.0);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.edgeLightingLocation, false);
     } else {
-        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.glowStrengthLocation, static_cast<float>(glow.alphaF()));
+        m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.glowStrengthLocation, m_glowAlpha);
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.edgeLightingLocation, m_settings.general.edgeLighting);
     }
 
@@ -1618,7 +1811,7 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
             return;
         }
 
-        if (GLTexture *noiseTexture = ensureNoiseTexture(noiseStrength)) {
+        if (GLTexture *noiseTexture = ensureNoiseTexture()) {
             ShaderManager::instance()->pushShader(m_noisePass.shader.get());
 
             QMatrix4x4 noiseProjectionMatrix = viewport.projectionMatrix();
@@ -1626,6 +1819,8 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
 
             m_noisePass.shader->setUniform(m_noisePass.mvpMatrixLocation, noiseProjectionMatrix);
             m_noisePass.shader->setUniform(m_noisePass.noiseTextureSizeLocation, QVector2D(noiseTexture->width(), noiseTexture->height()));
+            // the old per-strength texture held rand() % strength, i.e. up to (strength - 1) / 255
+            m_noisePass.shader->setUniform(m_noisePass.noiseScaleLocation, static_cast<float>(noiseStrength - 1) / 255.0f);
 
             glActiveTexture(GL_TEXTURE0);
             noiseTexture->bind();
@@ -1646,7 +1841,7 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
                       splitBlurSettings ? contentBlurSettings.offset : combinedBlurSettings.offset);
 
     if (splitRenderRegions && frameVertexCount > 0) {
-        GLTexture *frameBlurredTexture = splitBlurSettings ? runBlurPass(m_decorationBlurSettings) : contentBlurredTexture;
+        GLTexture *frameBlurredTexture = (splitBlurSettings && !sharedPyramid) ? runBlurPass(m_decorationBlurSettings) : contentBlurredTexture;
         m_roundedOnscreenPass.shader->setUniform(m_roundedOnscreenPass.tintStrengthLocation, frameTintStrength);
         drawBlurredRegion(frameBlurredTexture,
                           6 + contentVertexCount,
@@ -1664,6 +1859,8 @@ void BlurEffect::blur(const RenderTarget &renderTarget, const RenderViewport &vi
 
         glEnable(GL_BLEND);
         if (opacity < 1.0) {
+            // GL_CONSTANT_ALPHA reads the blend colour: without this it was whatever the last user left (KWin: 0 → no noise)
+            glBlendColor(0.0f, 0.0f, 0.0f, opacity);
             glBlendFunc(GL_CONSTANT_ALPHA, GL_ONE);
         } else {
             glBlendFunc(GL_ONE, GL_ONE);
@@ -1805,16 +2002,42 @@ void BlurEffect::setLobes(const QString &appId, int width, int height, const QVa
         shape.rects.append(QRectF(v.at(i), v.at(i + 1), v.at(i + 2), v.at(i + 3)));
     }
     if (shape.rects.isEmpty()) {
-        m_lobeShapes.remove(caption);
-    } else {
-        m_lobeShapes.insert(caption, shape);
+        clearLobes(appId, width, height);
+        return;
     }
-    effects->addRepaintFull();
+    // the shell re-sends the shape on every relayout, most of them with nothing changed: no repaint then
+    if (const auto it = m_lobeShapes.constFind(caption); it != m_lobeShapes.constEnd() && *it == shape) {
+        return;
+    }
+    m_lobeShapes.insert(caption, shape);
+    repaintLobeWindows(caption);
 }
 
 void BlurEffect::clearLobes(const QString &appId, int width, int height)
 {
-    m_lobeShapes.remove(QStringLiteral("%1:%2x%3").arg(appId).arg(width).arg(height));
-    effects->addRepaintFull();
+    const QString caption = QStringLiteral("%1:%2x%3").arg(appId).arg(width).arg(height);
+    if (m_lobeShapes.remove(caption) > 0) {
+        repaintLobeWindows(caption);
+    }
+}
+
+QString BlurEffect::lobeKeyFor(const EffectWindow *w)
+{
+    if (!w->isDock()) {
+        return QString();
+    }
+    const QString cls = w->windowClass().section(QLatin1Char(' '), -1);
+    const QSize sz = w->frameGeometry().size().toSize();
+    return QStringLiteral("%1:%2x%3").arg(cls).arg(sz.width()).arg(sz.height());
+}
+
+// Only the dock windows the shape belongs to are repainted (it used to be the whole screen, on every relayout).
+void BlurEffect::repaintLobeWindows(const QString &key)
+{
+    for (auto &[window, data] : m_windows) {
+        if (data.lobeKey == key) {
+            window->addRepaintFull();
+        }
+    }
 }
 } // namespace KWin

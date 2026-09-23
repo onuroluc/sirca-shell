@@ -4,8 +4,6 @@ import QtQuick.Shapes
 import QtQuick.Effects
 import org.kde.taskmanager as TaskManager
 import org.kde.kirigami as Kirigami
-import org.kde.plasma.private.volume
-import org.kde.kitemmodels as KItemModels
 import SircaShell
 import "Glass"
 
@@ -20,11 +18,38 @@ Surface {
     strut: gap + dockH + gap
     slideMax: gap + dockH + 30
     edgeStrip: Qt.rect((width - dockW) / 2, 0, dockW, 0)
-    holdOpen: launcherOpen || previewShown || dragging || editing
+    holdOpen: launcherOpen || previewShown || dragging || editing || dodgeExempt
     dodge: Config.dockDodge
     blur: Config.dockBlur
     quiet: fullscreenActive
     property int hoverIndex: -2                   // -1 = launcher glyph, >= 0 task index, -2 none
+    // ---- dodge modes (config dockDodgeMode). Main's watcher only says whether ANY window lies over the dock's strip
+    // (`covered`, "all"). With "active" only the focused window counts, with "maximized" only a maximised one: for every
+    // other window the dock stays put, which holdOpen does; the test walks the dock's own model (its children are the windows).
+    readonly property string dodgeMode: String(Config.get("dockDodgeMode", "all"))
+    property bool modeCovered: false
+    readonly property bool dodgeExempt: dodgeMode !== "all" && covered && !modeCovered
+    // a window lies over the strip and the dock does not move (dodge off, or the mode exempts that window): denser glass, so
+    // the icons still read over whatever is behind them (config dockTintAlphaTouched)
+    readonly property bool touched: covered && (!Config.dockDodge || dodgeExempt)
+    property real tintA: touched ? Config.get("dockTintAlphaTouched", 0.85) : Config.dockTintAlpha
+    Behavior on tintA { NumberAnimation { duration: Config.slow } }
+    function refreshModeCovered() {
+        const m = tasksModel; if (!m || dodgeMode === "all") { modeCovered = covered; return }
+        const R_ = TaskManager.AbstractTasksModel; const cur = vdInfo.currentDesktop
+        const r = Qt.rect(screenX + x + (width - dockW) / 2, screenY + y + height - strutSize, dockW, strutSize)     // the strip Main tests, in desktop coordinates
+        const hit = idx => { if (m.data(idx, R_.IsMinimized) || m.data(idx, R_.IsLauncher)) return false
+            if (dodgeMode === "active" ? !m.data(idx, R_.IsActive) : !m.data(idx, R_.IsMaximized)) return false
+            if (!m.data(idx, R_.IsOnAllVirtualDesktops)) { const vds = m.data(idx, R_.VirtualDesktops); if (vds && vds.length && vds.indexOf(cur) < 0) return false }   // the model is not desktop-filtered
+            const g = m.data(idx, R_.Geometry); return !!g && g.width > 0 && g.x < r.x + r.width && g.x + g.width > r.x && g.y < r.y + r.height && g.y + g.height > r.y }
+        let c = false
+        for (let i = 0; i < m.count && !c; ++i) { const idx = m.makeModelIndex(i)
+            if (m.data(idx, R_.IsGroupParent)) { const n = m.rowCount(idx); for (let k = 0; k < n && !c; ++k) c = hit(m.makeModelIndex(i, k)) } else c = hit(idx) }
+        modeCovered = c
+    }
+    onCoveredChanged: modeRefresh.kick()
+    onDodgeModeChanged: modeRefresh.kick()
+    Timer { id: modeRefresh; interval: 40; onTriggered: dock.refreshModeCovered(); function kick() { if (!running) start() } }   // a throttle: a dragged window reports its frame continuously
 
     TaskManager.ActivityInfo { id: activityInfo }
     TaskManager.VirtualDesktopInfo { id: vdInfo }
@@ -92,30 +117,15 @@ Surface {
     readonly property real tW: Math.round(thumbW * thumbScale)
     readonly property real tH: Math.round(thumbH * thumbScale)
     readonly property real pvW: lobeMode === "menu" ? 232 : pvCount * (tW + 8) + 8
-    // ---- per-app audio: the app's playback streams (PipeWire / PulseAudio "sink inputs"), matched to the hovered task by
-    // process id, else by the binary name against the app id. One row under the thumbnails: icon (tap = mute), slider.
-    readonly property var streamModel: SinkInputModel {}
-    property var appStreams: []                   // [{ obj, name }] for the previewed task; obj is the PulseAudioQt stream (volume / muted writable)
-    readonly property bool hasAudio: appStreams.length > 0
+    // ---- per-app audio (DockAudio.qml, behind a Loader by URL: org.kde.plasma.private.volume is a private Plasma module;
+    // if it is missing or has changed, the dock loses its volume row and nothing else)
+    Loader { id: audioLoader; source: "DockAudio.qml"; onLoaded: { item.dock = dock; item.refresh() }
+        onStatusChanged: if (status === Loader.Error) console.warn("dock: per-app audio unavailable (org.kde.plasma.private.volume)") }
+    readonly property var audio: audioLoader.item
+    readonly property bool hasAudio: audio ? audio.hasAudio : false
     readonly property int audioRowH: 40
-    function appVolumePct() { const o = appStreams.length ? appStreams[0].obj : null; return o ? Math.round(o.volume / PulseAudio.NormalVolume * 100) : 0 }
-    function appMuted() { const o = appStreams.length ? appStreams[0].obj : null; return o ? o.muted : false }
-    property int audioRev: 0                      // bumped on stream changes: the row's bindings re-read volume / muted
-    function refreshAppStreams() {
-        if (!previewShown || previewIndex < 0 || lobeMode !== "windows") { if (appStreams.length) appStreams = []; return }
-        const m = tasksModel, R_ = TaskManager.AbstractTasksModel, idx = m.makeModelIndex(previewIndex); if (!m) return
-        const pids = [], one = i => { const p = m.data(i, R_.AppPid); if (p > 0) pids.push(p) }
-        if (m.data(idx, R_.IsGroupParent)) { const n = m.rowCount(idx); for (let c = 0; c < n; ++c) one(m.makeModelIndex(previewIndex, c)) } else one(idx)
-        const appId = String(m.data(idx, R_.AppId) || "").replace(/\.desktop$/, "").toLowerCase(); const base = appId.split(".").pop()
-        const sm = streamModel, roleObj = sm.KItemModels.KRoleNames.role("PulseObject"), roleName = sm.KItemModels.KRoleNames.role("Name"), roleVirt = sm.KItemModels.KRoleNames.role("VirtualStream")
-        const out = []
-        for (let r = 0; r < sm.rowCount(); ++r) { const mi = sm.index(r, 0); if (sm.data(mi, roleVirt)) continue
-            const obj = sm.data(mi, roleObj); if (!obj || !obj.client) continue
-            const props = obj.client.properties || {}; const spid = parseInt(props["application.process.id"] || "0"); const bin = String(props["application.process.binary"] || obj.client.name || "").toLowerCase()
-            if ((spid > 0 && pids.indexOf(spid) >= 0) || (base.length > 2 && bin.indexOf(base) >= 0)) out.push({ obj: obj, name: sm.data(mi, roleName) || "" }) }
-        appStreams = out; audioRev++
-    }
-    Connections { target: dock.streamModel; function onRowsInserted() { dock.refreshAppStreams() } function onRowsRemoved() { dock.refreshAppStreams() } function onDataChanged() { dock.audioRev++ } }
+    readonly property int audioRev: audio ? audio.rev : 0     // bumped on stream changes: the row's bindings re-read volume / muted
+    function refreshAppStreams() { if (audio) audio.refresh() }
     onPreviewIndexChanged: refreshAppStreams()
     readonly property real pvH: lobeMode === "menu" ? menuItems.length * 34 + 16 : tH + 16 + (hasAudio ? audioRowH : 0)
     property real previewGrow: previewShown ? 1 : 0
@@ -146,11 +156,12 @@ Surface {
     LobeShape {
         id: shape
         anchors.fill: parent
+        reach: dock.polygon                // the fully grown outline: the shadow layers are sized once per open/close, not per frame
         flip: !dock.panelUp
         bar: dock.panelUp ? dock.panelRect : dock.barRect
         lobes: dock.panelUp ? [{ x: dock.barRect.x, w: dock.barRect.width, h: dock.dockH }] : (dock.lobeH > 0.5 ? [{ x: dock.lobeX, w: dock.pvW, h: dock.lobeH }] : [])
         radius: dock.rad
-        tint: Config.glassTint(Config.dockTintAlpha); rim: Qt.rgba(1, 1, 1, Config.dockRimAlpha * Config.mixn(1, 3.2)); sheen: Config.dockSheen * Config.mixn(1, 2.5); shadowStrength: Config.dockShadow   // literal-ok: the rim is white light in both modes
+        tint: Config.glassTint(dock.tintA); rim: Qt.rgba(1, 1, 1, Config.dockRimAlpha * Config.mixn(1, 3.2)); sheen: Config.dockSheen * Config.mixn(1, 2.5); shadowStrength: Config.dockShadow   // literal-ok: the rim is white light in both modes
         fillet: Math.max(1, Math.min(14, (dock.panelUp ? dock.panelH : dock.lobeH) / 2))
         onPolygonChanged: dock.pushShape()
     }
@@ -229,7 +240,8 @@ Surface {
         // a game does not have to be full screen here (centred borderless 3440x1440 on the 32:9 panel): Proton / Steam games
         // have the window class steam_app_<id>, gamescope its own
         const id = (a && a.valid) ? String(m.data(a, R_.AppId) || "") : ""; gameActive = /^(steam_app_|gamescope)/i.test(id) }
-    Connections { target: dock.tasksModel; function onActiveTaskChanged() { dock.refreshFullscreen() } function onDataChanged() { fsSettle.restart() } }
+    Connections { target: dock.tasksModel; function onActiveTaskChanged() { dock.refreshFullscreen(); modeRefresh.kick() } function onDataChanged() { fsSettle.restart(); modeRefresh.kick() }
+        function onRowsInserted() { modeRefresh.kick() } function onRowsRemoved() { modeRefresh.kick() } }
     Timer { id: fsSettle; interval: 400; onTriggered: dock.refreshFullscreen() }
     property bool dragging: false
 
@@ -260,6 +272,22 @@ Surface {
         if (debug) console.log("single", row, "active", m.data(idx, R_.IsActive), "minimized", m.data(idx, R_.IsMinimized));
         if (m.data(idx, R_.IsActive)) m.requestToggleMinimized(idx); else m.requestActivate(idx);
     }
+    // the mouse wheel over an app with several windows walks through them: dir +1 = the next one, -1 = the previous
+    function cycleWindows(row, dir) {
+        const m = tasksModel; if (!m) return;
+        const R_ = TaskManager.AbstractTasksModel; const idx = m.makeModelIndex(row);
+        if (!m.data(idx, R_.IsGroupParent)) { m.requestActivate(idx); return; }
+        const n = m.rowCount(idx); if (n < 1) return; let a = -1;
+        for (let c = 0; c < n; ++c) if (m.data(m.makeModelIndex(row, c), R_.IsActive)) { a = c; break; }
+        const base = a < 0 ? (dir > 0 ? -1 : 0) : a;              // none focused: the first one going down, the last one going up
+        m.requestActivate(m.makeModelIndex(row, (base + dir + n) % n));
+    }
+    // a file or a link dropped on an app opens it with that app (the task model runs the launcher with the urls)
+    function openUrls(row, urls) {
+        const m = tasksModel; if (!m || row < 0 || !urls || !urls.length) return;
+        previewShown = false; openTimer.stop();
+        m.requestOpenUrls(m.makeModelIndex(row), urls); launched(row);
+    }
     Timer { id: openTimer; interval: Config.dockPreviewDelay; onTriggered: if (dock.hoverIndex >= 0 && Config.dockPreviews && !dock.editing) dock.openPreview(dock.hoverIndex) }
     Timer { id: closeTimer; interval: dock.lobeMode === "menu" ? 700 : 260; onTriggered: if (dock.hoverIndex < 0 && !pvHover.hovered) dock.previewShown = false }
     onHoverIndexChanged: {
@@ -289,9 +317,15 @@ Surface {
 
     // ---- colour haze: every icon throws a blurred pool of its own colours into the glass beneath it. One layer, masked
     // to the dock's rounded outline, holds all of them; it sits under the icons and above the dock's tint.
+    // The layer and its mask cover the dock plus what the haze can reach (the mask fades it out 90 px above the dock, the
+    // icons' blurred pools spread ~46 px around them), not the whole surface, which is as wide as the screen and as tall
+    // as the launcher. Whole pixels: a layer that changes size is re-allocated. The mask's Shape and the pools are shifted
+    // back by the rect's origin so everything stays where it was; mask and layer are the same size, pixel for pixel.
+    readonly property rect hazeRect: { const l = 48, up = 96, down = 40; const x = Math.max(0, Math.floor(barRect.x - l)), y = Math.max(0, Math.floor(barRect.y - up))
+        return Qt.rect(x, y, Math.max(1, Math.min(Math.ceil(width), Math.ceil(barRect.x + barRect.width + l)) - x), Math.max(1, Math.min(Math.ceil(height), Math.ceil(barRect.y + barRect.height + down)) - y)) }
     Item {
         id: hazeLayer
-        anchors.fill: parent          // the whole surface: the haze carries on into a preview lobe or the launcher panel
+        x: dock.hazeRect.x; y: dock.hazeRect.y; width: dock.hazeRect.width; height: dock.hazeRect.height
         visible: Config.hazeStrength > 0.01
         layer.enabled: true
         // threshold 0.5 + spread 1.0 = smoothstep(0, 1, maskAlpha): a soft, proportional mask. (0.0 + 1.0 evaluates to
@@ -304,15 +338,15 @@ Surface {
                 required property var model
                 source: model.decoration
                 iconSize: Config.dockIcon
-                x: barRect.x + dock.pad + Config.dockCell * (index + 1) + Config.dockCell / 2 - width / 2
-                y: barRect.y + dockH / 2 - height / 2 + 4
+                x: barRect.x + dock.pad + Config.dockCell * (index + 1) + Config.dockCell / 2 - width / 2 - dock.hazeRect.x
+                y: barRect.y + dockH / 2 - height / 2 + 4 - dock.hazeRect.y
                 strength: Config.hazeStrength * (model.IsActive ? 1.35 : (dock.hoverIndex === index ? 1.2 : 1.0)) * (model.IsLauncher ? 0.7 : 1.0)
             }
         }
     }
     // mask = exactly the outline that is drawn (dock + whatever has grown out of it), so there is no seam at the dock's top edge
-    Item { id: hazeMask; anchors.fill: parent; visible: false; layer.enabled: true
-        Shape { anchors.fill: parent; preferredRendererType: Shape.CurveRenderer
+    Item { id: hazeMask; x: dock.hazeRect.x; y: dock.hazeRect.y; width: dock.hazeRect.width; height: dock.hazeRect.height; visible: false; layer.enabled: true
+        Shape { x: -dock.hazeRect.x; y: -dock.hazeRect.y; width: dock.width; height: dock.height; preferredRendererType: Shape.CurveRenderer
             // full strength inside the dock, then a smooth fade over the first ~90 px of whatever has grown above it: the haze
             // reaches up into a preview or the launcher and dies away, instead of smearing colour across the whole panel
             ShapePath { strokeWidth: -1
@@ -392,6 +426,30 @@ Surface {
                 onStartingChanged: if (starting && Config.dockHop) hopAnim.restart()
                 Timer { running: cell.starting && Config.dockHop; interval: 900; repeat: true; onTriggered: hopAnim.restart() }
                 readonly property var badge: { const id = String(model.AppId || "").replace(/\.desktop$/, ""); return dock.badges[id] || null }
+                // a window asks for attention: the icon shakes ONCE (whole pixels: the dock is a wide surface), then the pills
+                // stay orange until it is looked at. Not while a game has the screen: nobody would see it, and the shell is quiet.
+                property real wiggleX: 0
+                readonly property bool attention: model.IsDemandingAttention === true
+                onAttentionChanged: if (attention && !dock.quiet) wiggleAnim.restart()
+                SequentialAnimation { id: wiggleAnim
+                    NumberAnimation { target: cell; property: "wiggleX"; to: -7; duration: 60; easing.type: Easing.OutQuad }
+                    NumberAnimation { target: cell; property: "wiggleX"; to: 7; duration: 90 }
+                    NumberAnimation { target: cell; property: "wiggleX"; to: -5; duration: 80 }
+                    NumberAnimation { target: cell; property: "wiggleX"; to: 4; duration: 70 }
+                    NumberAnimation { target: cell; property: "wiggleX"; to: 0; duration: 80; easing.type: Easing.OutQuad } }
+                // drop a file or a link on the icon: opens it with this app. Wayland sends no hover while something is
+                // being dragged, so the drop zone itself lights the cell (hoverIndex) and puts it back on leaving.
+                DropArea { id: dropZone; anchors.fill: parent; enabled: !dock.editing && !drag.active
+                    function urlsOf(d) { if (d.hasUrls) return d.urls; const t = d.hasText ? String(d.text).trim() : ""; return /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? [Qt.url(t)] : [] }
+                    onEntered: d => { if (!urlsOf(d).length) { d.accepted = false; return } dock.hoverIndex = cell.index }
+                    onExited: if (dock.hoverIndex === cell.index) dock.hoverIndex = -2
+                    onDropped: d => { const u = urlsOf(d); if (!u.length) return; d.accept(Qt.CopyAction); dock.hoverIndex = -2; dock.openUrls(cell.index, u) } }
+                // the wheel over an app with several windows walks through them; whole notches only, and one step per 160 ms
+                // so a free-spinning wheel does not race through the group
+                WheelHandler { target: null; enabled: cell.windows > 1 && !dock.editing; acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                    property real acc: 0
+                    onWheel: ev => { if (wheelCool.running) return; acc += ev.angleDelta.y; if (Math.abs(acc) < 100) return; const dir = acc > 0 ? -1 : 1; acc = 0; wheelCool.restart(); dock.cycleWindows(cell.index, dir) } }
+                Timer { id: wheelCool; interval: 160 }
 
                 // drag to reorder: the icon follows the pointer; passing half a cell swaps places in the model
                 property real dragX: 0
@@ -414,7 +472,7 @@ Surface {
                 Behavior on dragX { enabled: !drag.active; Spring {} }
 
                 Spotlight { visible: Config.dockSpotlight; anchors.fill: parent; anchors.topMargin: 2; anchors.bottomMargin: 1; strength: model.IsActive ? 0.36 : (cell.hovered || drag.active ? 0.16 : 0) }
-                Item { id: icon; anchors.horizontalCenter: parent.horizontalCenter; anchors.horizontalCenterOffset: cell.dragX; anchors.bottom: parent.bottom; anchors.bottomMargin: (dockH - Config.dockIcon) / 2 + cell.hop
+                Item { id: icon; anchors.horizontalCenter: parent.horizontalCenter; anchors.horizontalCenterOffset: cell.dragX + Math.round(cell.wiggleX); anchors.bottom: parent.bottom; anchors.bottomMargin: (dockH - Config.dockIcon) / 2 + cell.hop
                     width: Config.dockIcon * (drag.active ? Config.dockMagnify : cell.mag); height: width
                     Behavior on width { Spring {} }
                     // The picture itself is rendered once, at the magnified size, and only scaled into this box. Animating the
@@ -427,8 +485,10 @@ Surface {
                 Rectangle { visible: Config.dockBadges && !!(cell.badge && cell.badge["count-visible"] && cell.badge["count"] > 0); anchors.right: icon.right; anchors.top: icon.top; anchors.rightMargin: -4; anchors.topMargin: -2
                     height: 17; width: Math.max(17, badgeText.implicitWidth + 9); radius: 8.5; color: "#e5484d"; border.width: 1; border.color: Qt.rgba(0, 0, 0, 0.35)
                     Text { id: badgeText; anchors.centerIn: parent; text: cell.badge ? (cell.badge["count"] > 99 ? "99+" : String(cell.badge["count"] || "")) : ""; color: "white"; font.pixelSize: 10; font.weight: Font.Bold } }   // literal-ok: text on a red badge
-                Rectangle { visible: !!(cell.badge && cell.badge["progress-visible"]); anchors.horizontalCenter: icon.horizontalCenter; anchors.bottom: icon.bottom; anchors.bottomMargin: 2; width: icon.width * 0.8; height: 4; radius: 2; color: Qt.rgba(0, 0, 0, 0.55)
-                    Rectangle { height: parent.height; radius: 2; color: "white"; width: parent.width * Math.min(1, Math.max(0, (cell.badge && cell.badge["progress"]) || 0)) } }   // literal-ok: progress bar on the icon
+                // progress (a copy job, a download): a thin bar along the icon's bottom edge, above the window pills
+                Rectangle { visible: Config.dockBadges && !!(cell.badge && cell.badge["progress-visible"]); anchors.horizontalCenter: icon.horizontalCenter; anchors.bottom: icon.bottom; anchors.bottomMargin: 1; width: Math.round(icon.width * 0.8); height: 3; radius: 1.5; color: Qt.rgba(0, 0, 0, 0.55)
+                    Rectangle { height: parent.height; radius: 1.5; color: "white"; width: Math.round(parent.width * Math.min(1, Math.max(0, (cell.badge && cell.badge["progress"]) || 0)))   // literal-ok: white on the dark track, both modes
+                        Behavior on width { NumberAnimation { duration: Config.normal } } } }
                 // edit mode: a pinned app can be taken off the dock right here
                 Rectangle { id: unpin; visible: dock.editing && cell.pinnedUrl !== ""; z: 5; anchors.right: icon.right; anchors.top: icon.top; anchors.rightMargin: -6; anchors.topMargin: -6
                     width: 19; height: 19; radius: 9.5; color: Qt.rgba(229/255, 72/255, 77/255, uh.hovered ? 1 : 0.92); border.width: 1; border.color: "white"
@@ -481,19 +541,19 @@ Surface {
                     onClose: dock.tasksModel.requestClose(idx()) } } }
         // the app's volume (see refreshAppStreams). Every stream of the app moves together: one slider.
         Item { id: audioRow; visible: dock.lobeMode === "windows" && dock.hasAudio; x: 8; y: 8 + dock.tH + 4; width: dock.pvW - 16; height: dock.audioRowH
-            readonly property int pct: { dock.audioRev; return dock.appVolumePct() }
-            readonly property bool muted: { dock.audioRev; return dock.appMuted() }
+            readonly property int pct: { dock.audioRev; return dock.audio ? dock.audio.volumePct() : 0 }
+            readonly property bool muted: { dock.audioRev; return dock.audio ? dock.audio.muted() : false }
             Rectangle { x: 0; y: 0; width: parent.width; height: 1; color: Config.fg(0.08) }
             Rectangle { id: ab; x: 6; anchors.verticalCenter: parent.verticalCenter; width: 28; height: 28; radius: 14; color: Config.fg(abh.hovered ? 0.12 : 0.06)
                 Behavior on color { ColorAnimation { duration: Config.quick } }
                 Kirigami.Icon { anchors.centerIn: parent; width: 15; height: 15; isMask: true; color: Config.ink
                     source: audioRow.muted || audioRow.pct === 0 ? "audio-volume-muted-symbolic" : audioRow.pct < 34 ? "audio-volume-low-symbolic" : audioRow.pct < 67 ? "audio-volume-medium-symbolic" : "audio-volume-high-symbolic" }
                 HoverHandler { id: abh; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: { const mu = !audioRow.muted; for (const st of dock.appStreams) st.obj.muted = mu; dock.audioRev++ } } }
+                TapHandler { onTapped: if (dock.audio) dock.audio.setMuted(!audioRow.muted) } }
             GlassSlider { anchors.left: ab.right; anchors.leftMargin: 10; anchors.right: apct.left; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
                 from: 0; to: 100; step: 1; value: audioRow.pct; opacity: audioRow.muted ? 0.45 : 1     // muted: the level is kept but greyed, so "100 % and silent" reads as what it is
-                onMoved: v => { const vol = Math.round(v) * PulseAudio.NormalVolume / 100; for (const st of dock.appStreams) { st.obj.volume = vol; if (st.obj.muted && v > 0) st.obj.muted = false } dock.audioRev++ }
-                onCommitted: v => { const vol = Math.round(v) * PulseAudio.NormalVolume / 100; for (const st of dock.appStreams) st.obj.volume = vol; dock.audioRev++ } }
+                onMoved: v => { if (dock.audio) dock.audio.setVolumePct(v, true) }
+                onCommitted: v => { if (dock.audio) dock.audio.setVolumePct(v, false) } }
             Text { id: apct; anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; width: 44; horizontalAlignment: Text.AlignRight
                 text: audioRow.muted ? "muted" : audioRow.pct + "%"; color: Config.inkDim; font.pixelSize: 12; font.features: { "tnum": 1 } } } }
     Shortcut { sequence: "Escape"; onActivated: { dock.launcherOpen = false; dock.previewShown = false } }

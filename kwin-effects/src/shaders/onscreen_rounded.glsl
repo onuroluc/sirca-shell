@@ -1,5 +1,4 @@
 #include "sdf.glsl"
-#include "colormanagement.glsl"
 
 uniform sampler2D texUnit;
 uniform mat4 colorMatrix;
@@ -36,7 +35,7 @@ void main(void)
         sum /= 12.0;
     }
 
-    sum = glass(sum, cornerRadius);
+    sum = glass(sum, cornerRadius, position, dist);
 
     float f = lobeCount > 0
         ? shapeDist(vec2(vertex.x - box.x, box.y - vertex.y), box.zw, cornerRadius)

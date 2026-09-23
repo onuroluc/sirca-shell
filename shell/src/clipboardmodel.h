@@ -6,6 +6,7 @@
 // manager marks as secret are never stored. History is saved under ~/.local/share/sirca-shell/clipboard/.
 #include <QAbstractListModel>
 #include <QDateTime>
+#include <QHash>
 #include <QTimer>
 #include <qqml.h>
 
@@ -34,17 +35,20 @@ Q_SIGNALS:
     void countChanged();
     void filterChanged();
 private:
-    struct Entry { QString kind, text, imagePath; QDateTime time; QString note; bool pinned = false; };
+    struct Entry { QString kind, text, imagePath; QDateTime time; QString note; bool pinned = false; quint64 id = 0; };   // id: stable row identity (see refilter)
     void onClipboardChanged();
     void restoreIfEmpty();
     void push(const Entry &e);
-    void refilter();
+    void refilter();                               // brings m_rows to the current order with removes / inserts / moves
+    void changed(quint64 id);                      // dataChanged for that entry's row, if shown
     void load();
     void save();
     QMimeData *toMime(const Entry &e) const;
     static QString dir();
     QList<Entry> m_entries;
-    QList<int> m_rows;
+    QList<quint64> m_rows;                         // shown rows, as entry ids
+    QHash<quint64, int> m_index;                   // id -> position in m_entries (rebuilt by refilter)
+    quint64 m_lastId = 0;
     QString m_filter;
     QTimer m_saveLater, m_restoreLater;
     bool m_settingOurselves = false;

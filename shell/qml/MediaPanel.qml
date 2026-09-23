@@ -10,9 +10,9 @@ import SircaShell
 
 Item {
     id: panel
-    required property var mpris                  // Mpris.Mpris2Model
+    property var mpris: null                     // Mpris.Mpris2Model (set by the bar's Loader; null while the source is unavailable)
     property bool open: false
-    readonly property var player: mpris.currentPlayer
+    readonly property var player: mpris ? mpris.currentPlayer : null
     readonly property bool playing: !!player && player.playbackStatus === Mpris.PlaybackStatus.Playing
     readonly property real length: player ? Math.max(0, player.length) : 0
     readonly property int pad: 8
@@ -24,6 +24,17 @@ Item {
         return (h > 0 ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(ss).padStart(2, "0");
     }
     Timer { interval: 500; repeat: true; running: panel.open && panel.playing; triggeredOnStart: true; onTriggered: if (panel.player) panel.player.updatePosition() }
+
+    // ---- lyrics (opt-in: config `lyrics: true`; LRCLIB, cached per track). Looked up while the lobe is open, so a closed
+    // lobe never causes a request. Synced lines follow the player's position; plain text scrolls by hand.
+    Lyrics { id: lyrics; enabled: Config.get("lyrics", false) === true }
+    readonly property string trackKey: player ? (player.track ?? "") + "|" + (player.artist ?? "") + "|" + (player.album ?? "") + "|" + Math.round(length / 1e6) : ""
+    function lookupLyrics() { if (open && lyrics.enabled && player && (player.track ?? "") !== "") lyrics.lookup(player.track ?? "", player.artist ?? "", player.album ?? "", Math.round(length / 1e6)) }
+    onTrackKeyChanged: lookupLyrics()
+    onOpenChanged: lookupLyrics()
+    Connections { target: lyrics; function onEnabledChanged() { panel.lookupLyrics() } }
+    readonly property bool lyricsShown: lyrics.enabled && lyrics.status === "ready" && lyrics.lines.length > 0
+    readonly property int lyricLine: lyrics.synced && player ? lyrics.lineAt(player.position / 1000) : -1
 
     // a thin glass slider: line, bright fill, a knob that shows up with the pointer
     component Line: Item {
@@ -72,9 +83,14 @@ Item {
     // The cover's colour, caught in the glass behind everything. A blurred OPAQUE picture keeps hard edges (unlike a dock
     // icon, which has transparent margins), and a spot glow at a cover that sits in the corner looks lopsided once it is kept off the
     // edges. So the haze is an even wash of the cover's colours over the whole popup: stronger at the top, feathered on all sides.
+    // The canvas reaches hazeUp further at the top: the wash used to be clipped along the bar's bottom edge (the lobe's
+    // container starts there), which read as a hard line; the host lets the container run up into the bar by that much.
+    // The wash itself is no bigger, the feather core below defines it.
+    property real hazeUp: 0
     Item { id: haze
         readonly property real over: Config.lobePad
-        x: -over; y: -over; width: panel.width + 2 * over; height: panel.height + 2 * over
+        readonly property real overTop: over + panel.hazeUp
+        x: -over; y: -overTop; width: panel.width + 2 * over; height: panel.height + over + overTop
         opacity: Config.hazeStrength * 2.0; visible: art.status === Image.Ready
         // two masks, as two nested layers (an item's own layer.effect is ignored when it is used as a mask source):
         // outer = feathered core along the header row, inner = slight left-to-right fall-off
@@ -93,7 +109,7 @@ Item {
         // A low, wide core along the header row (cover + title) and a very wide blur: the wash sits on and around the picture
         // and the title, has no outline, and is gone before it reaches the rim or the bar above.
         Rectangle { id: featherCore
-            readonly property real rowY: haze.over + panel.pad + 54            // centre line of the cover
+            readonly property real rowY: haze.overTop + panel.pad + 54         // centre line of the cover
             x: 44; y: rowY - 30; width: parent.width - 120; height: 84; radius: 36; color: Config.fgSolid; visible: false; layer.enabled: true }
         MultiEffect { anchors.fill: featherCore; source: featherCore; blurEnabled: true; blur: 1.0; blurMax: 64; blurMultiplier: 1.2; autoPaddingEnabled: true } }
     Item { id: hazeMask; x: haze.x; y: haze.y; width: haze.width; height: haze.height; visible: false; layer.enabled: true
@@ -170,13 +186,34 @@ Item {
                 text: Math.round((vol.dragging ? vol.dragValue : vol.value) * 100) + "%" }
         }
 
+        // lyrics: five lines' worth, the current one bright and centred; a click on a synced line seeks there
+        Item { width: parent.width; height: panel.lyricsShown ? 118 : (lyrics.enabled && lyrics.status === "loading" ? 18 : 0); visible: height > 0; clip: true
+            Text { visible: lyrics.status === "loading"; anchors.horizontalCenter: parent.horizontalCenter; color: Config.inkDim; font.pixelSize: 11; text: "Looking up lyrics…" }
+            Rectangle { anchors.fill: parent; radius: 12; color: Config.fg(0.045); visible: panel.lyricsShown }
+            ListView { id: lyricList; anchors.fill: parent; anchors.margins: 6; visible: panel.lyricsShown; model: panel.lyricsShown ? lyrics.lines : []; clip: true; spacing: 0
+                // synced: the list is driven, the current line held in the middle; plain: a free scroll
+                interactive: !lyrics.synced
+                currentIndex: lyrics.synced ? Math.max(0, panel.lyricLine) : -1
+                highlightRangeMode: lyrics.synced ? ListView.StrictlyEnforceRange : ListView.NoHighlightRange
+                preferredHighlightBegin: height / 2 - 11; preferredHighlightEnd: height / 2 + 11
+                highlightMoveDuration: 260; highlightMoveVelocity: -1
+                // the last lines can still reach the middle: room under them (synced only; plain text ends where it ends)
+                footer: Item { width: 1; height: lyrics.synced ? lyricList.height / 2 : 0 } header: Item { width: 1; height: lyrics.synced ? lyricList.height / 2 - 11 : 0 }
+                delegate: Item { id: ll; required property int index; required property var modelData; width: lyricList.width; height: Math.max(22, lt.implicitHeight + 4)
+                    readonly property int dist: lyrics.synced ? Math.abs(index - panel.lyricLine) : 0
+                    Text { id: lt; width: parent.width - 8; x: 4; anchors.verticalCenter: parent.verticalCenter; wrapMode: Text.Wrap; horizontalAlignment: lyrics.synced ? Text.AlignHCenter : Text.AlignLeft
+                        text: ll.modelData.text === "" ? "♪" : ll.modelData.text; color: Config.ink; font.pixelSize: lyrics.synced && ll.dist === 0 ? 14 : 12.5; font.weight: lyrics.synced && ll.dist === 0 ? Font.DemiBold : Font.Normal
+                        opacity: !lyrics.synced ? 0.85 : ll.dist === 0 ? 1 : ll.dist === 1 ? 0.55 : ll.dist === 2 ? 0.32 : 0.16
+                        Behavior on opacity { NumberAnimation { duration: Config.normal } } }
+                    TapHandler { enabled: lyrics.synced && ll.modelData.t >= 0 && !!panel.player && panel.player.canSeek; onTapped: { panel.player.position = ll.modelData.t * 1000; panel.player.updatePosition() } } } } }
+
         // other players (row 0 of the model is the "follow the active one" multiplexer)
         Flow { width: parent.width; spacing: 6; visible: players.count > 2
             Repeater { id: players; model: panel.mpris
                 Item { id: chip
                     required property int index
                     required property var model
-                    readonly property bool current: panel.mpris.currentIndex === index
+                    readonly property bool current: !!panel.mpris && panel.mpris.currentIndex === index
                     visible: index > 0
                     width: visible ? chipRow.implicitWidth + 18 : 0; height: 26
                     Rectangle { anchors.fill: parent; radius: 13; color: Config.fg(chip.current ? 0.16 : (chh.hovered ? 0.09 : 0.05)); border.width: 1; border.color: Config.fg(chip.current ? 0.2 : 0.08) }
@@ -184,7 +221,7 @@ Item {
                         Kirigami.Icon { width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter; source: chip.model.iconName || "emblem-music-symbolic"; roundToIconSize: false }
                         Text { anchors.verticalCenter: parent.verticalCenter; text: chip.model.identity ?? ""; color: Config.ink; font.pixelSize: 11; font.weight: Font.Medium } }
                     HoverHandler { id: chh }
-                    TapHandler { onTapped: panel.mpris.currentIndex = chip.index } }
+                    TapHandler { onTapped: if (panel.mpris) panel.mpris.currentIndex = chip.index } }
             }
         }
     }

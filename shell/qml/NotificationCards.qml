@@ -54,14 +54,16 @@ Item {
                 actionNames: model.actionNames || []; actionLabels: model.actionLabels || []
                 hasDefaultAction: model.hasDefaultAction || false
                 critical: model.urgency === NotificationManager.Notifications.CriticalUrgency
+                low: model.urgency === NotificationManager.Notifications.LowUrgency
                 canReply: model.hasReplyAction || false; replyPlaceholder: model.replyPlaceholderText || ""
                 isJob: job; jobPercent: model.percentage || 0
                 jobBusy: job && cards.jobUnknown(model); jobInfo: job ? cards.jobLine(model) : ""
                 jobNote: job && model.jobState === NotificationManager.Notifications.JobStateStopped ? "Done" : (job && model.jobState === NotificationManager.Notifications.JobStateSuspended ? "Paused" : "")
-                // our own timeout: -1 = the user's default, 0 = stays; jobs stay while they run
-                readonly property int lifeMs: job ? 0 : (model.timeout === -1 ? settings.popupTimeout : model.timeout)
+                // our own timeout: -1 = the user's default, 0 = stays; jobs stay while they run, and so does a critical one
+                // (the spec leaves it to the server: a critical popup that vanished unseen would be the one that mattered)
+                readonly property int lifeMs: job || critical ? 0 : (model.timeout === -1 ? settings.popupTimeout : model.timeout)
                 property real remain: 1
-                timeLeft: lifeMs > 0 ? remain : -1
+                timeLeft: lifeMs > 0 ? remain : -1              // (the card rounds the line to whole pixels; see NotifCard)
                 NumberAnimation on remain { id: life; from: 1; to: 0; duration: Math.max(1, c.lifeMs); running: c.lifeMs > 0; paused: running && (c.hovered || c.replying)
                     onFinished: { const keep = model.resident || ((c.actionNames.length > 0 || c.hasDefaultAction) && !model.transient);
                         if (keep) model.expired = true; else popups.expire(c.idx) } }        // actionable ones stay usable in the history

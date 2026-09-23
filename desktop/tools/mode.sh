@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# glass-mode light|dark|toggle|status | theme NAME|next|list — switch the whole desktop between the light and the dark look:
-#   Sirca Shell (config key "mode"), KDE colour scheme (Glass / GlassLight: Qt apps, window decorations), GTK 3 / 4 +
-#   libadwaita + the portal's colour-scheme (Firefox, Electron, Ghostty follow that), icon theme, and the wallpaper.
+# glass-mode light|dark|toggle|status | theme NAME|next|list|wallpaper [FILE] — switch the whole desktop between the light
+#   and the dark look: Sirca Shell (config key "mode"), KDE colour scheme (Glass / GlassLight: Qt apps, window decorations),
+#   GTK 3 / 4 + libadwaita + the portal's colour-scheme (Firefox, Electron, Ghostty follow that), icon theme, and the wallpaper.
 # Wallpapers per mode live in the shell's config: "wallpaperDark" / "wallpaperLight" (set with:  glass-mode wallpaper light FILE).
+# `theme wallpaper [FILE]` derives the accent from the wallpaper (FILE, else the one showing now; tools/palette.py, the
+#   same maths as the shell's Palette) and applies it like any other theme, as the theme named "wallpaper".
 set -euo pipefail
 # qdbus is "qdbus6" on Ubuntu / Arch and "qdbus-qt6" on Fedora
 qdbus6() { if type -P qdbus6 >/dev/null 2>&1; then command qdbus6 "$@"; else qdbus-qt6 "$@"; fi; }
@@ -44,6 +46,27 @@ case "${1:-status}" in
   toggle) want=$([ "$now" = light ] && echo dark || echo light) ;;
   light|dark) want="$1" ;;
   theme)   # glass-mode theme NAME|next|list : a colour theme from the shell config ("themes": {name: {accent, light, dark}})
+     if [ "${2:-}" = wallpaper ]; then
+        # the theme "wallpaper" is (re)written first: accent from the picture, the current mode's wallpaper slot = the picture,
+        # the other mode keeps what it has (or gets the same picture); then it is applied below like a hand-made theme
+        img="${3:-}"; [ -n "$img" ] || img="$(cfg_get wallpaper)"
+        [ -n "$img" ] || img="$(grep -m1 -oP '^Image=\K.*' "$C/plasma-org.kde.plasma.desktop-appletsrc" 2>/dev/null | sed 's|^file://||' || true)"
+        [ -f "$img" ] || { echo "glass-mode theme wallpaper: no picture to read (give a FILE)"; exit 2; }
+        img="$(readlink -f "$img")"
+        acc="$($PY "$ROOT/tools/palette.py" "$img")" || { echo "glass-mode: tools/palette.py failed (needs python3-pil and python3-numpy)"; exit 1; }
+        dark="$(cfg_get wallpaperDark)"; light="$(cfg_get wallpaperLight)"
+        if [ "$now" = light ]; then light="$img"; else dark="$img"; fi
+        [ -n "$dark" ] || dark="$img"; [ -n "$light" ] || light="$img"
+        $PY - "$CFG" "$acc" "$dark" "$light" <<'P'
+import json,os,sys
+p,acc,dark,light=sys.argv[1:5]; os.makedirs(os.path.dirname(p),exist_ok=True)
+try: o=json.load(open(p))
+except Exception: o={}
+o.setdefault("themes",{})["wallpaper"]={"accent":acc,"dark":dark,"light":light}
+json.dump(o,open(p,"w"),indent=4)
+P
+        echo "wallpaper accent: $acc ($img)"
+     fi
      rc=0; $PY - "$CFG" "${2:-list}" <<'P' || rc=$?
 import json,sys
 p,arg=sys.argv[1],sys.argv[2]
@@ -70,7 +93,7 @@ if acc:
     # one line "R;G;B" that anything may read: the bash prompt reads it at every prompt, the fastfetch galaxy at render time
     rgb=";".join(str(round(v*255)) for v in (r,g,b)); d=os.path.expanduser("~/.config/sirca-shell"); os.makedirs(d,exist_ok=True); open(d+"/accent-rgb","w").write(rgb+"\n")
     # fastfetch: key / title colour in its config, and the galaxy logo re-rendered in the new gradient (its cache cleared)
-    ff=os.path.expanduser("~/.config/fastfetch/config.jsonc")
+    ff=os.path.expanduser("~/.config/fastfetch/config.jsonc") if os.environ.get("GLASS_NO_EXTRAS","0")!="1" else "/nonexistent"
     if os.path.isfile(ff):
         c=open(ff).read(); c2=re.sub(r'("(?:keys|title)":\s*"1;38;2;)\d+;\d+;\d+(")', lambda m: m.group(1)+rgb+m.group(2), c)
         if c2!=c: open(ff,"w").write(c2)
@@ -85,7 +108,7 @@ if acc:
         return "#333"
     slots={176+i: grad((i+0.5)/10) for i in range(10)}
     for name,v in sets.items():
-        f=os.path.expanduser("~/.config/ghostty/themes/"+name)
+        f=os.path.expanduser("~/.config/ghostty/themes/"+name) if os.environ.get("GLASS_NO_EXTRAS","0")!="1" else "/nonexistent"
         if not os.path.isfile(f): continue
         s=open(f).read()
         s=re.sub(r"(?m)^palette = 1[78]\d=.*\n","",s)                       # our ten slots, rewritten below
@@ -96,7 +119,7 @@ P
      [ $rc -eq 0 ] || exit $(( rc == 3 ? 0 : rc )); exec "$0" "$now" ;;      # re-apply the current mode with the new wallpapers
   wallpaper) [ -f "${3:-}" ] || { echo "usage: glass-mode wallpaper light|dark FILE"; exit 2; }
      cfg_set "wallpaper$([ "$2" = light ] && echo Light || echo Dark)" "$(readlink -f "$3")"; [ "$2" = "$now" ] && exec "$0" "$now"; exit 0 ;;
-  *) echo "usage: glass-mode light|dark|toggle|status | theme NAME|next|list | wallpaper light|dark FILE"; exit 2 ;;
+  *) echo "usage: glass-mode light|dark|toggle|status | theme NAME|next|list|wallpaper [FILE] | wallpaper light|dark FILE"; exit 2 ;;
 esac
 # remember the wallpaper of the mode we are leaving (first switch: whatever is showing now becomes that mode's picture)
 cur="$(cfg_get wallpaper)"; [ -n "$cur" ] || cur="$(grep -m1 -oP '^Image=\K.*' "$C/plasma-org.kde.plasma.desktop-appletsrc" 2>/dev/null | sed 's|^file://||' || true)"
@@ -109,7 +132,7 @@ if [ -n "$wall" ] && [ -f "$wall" ]; then cfg_set mode "$want" wallpaper "$wall"
 SCHEME=$([ "$want" = light ] && echo GlassLight || echo Glass); SUF=$([ "$want" = light ] && echo "-light" || echo "")
 THEME=$([ "$want" = light ] && echo adw-gtk3 || echo adw-gtk3-dark)
 "$(dirname "$(readlink -f "$0")")/lock_state.sh" >/dev/null 2>&1 || true        # the lock screen wears the same look
-( /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/gen_spotify.py" --apply >/dev/null 2>&1 || true ) &        # Spotify (Spicetify): accent at its next start, light / dark live
+[ "${GLASS_NO_EXTRAS:-0}" = 1 ] || ( /usr/bin/python3 "$(dirname "$(readlink -f "$0")")/gen_spotify.py" --apply >/dev/null 2>&1 || true ) &        # Spotify (Spicetify): accent at its next start, light / dark live
 # the generated files only change when the tokens do: build them when missing or older than tokens.json, not on every switch
 T="$ROOT/design/tokens.json"
 { [ "$ROOT/build/kde/$SCHEME.colors" -nt "$T" ] && [ "$ROOT/build/kde/$SCHEME.colors" -nt "$ROOT/tools/gen_kde.py" ]; } || $PY "$ROOT/tools/gen_kde.py" "$want" >/dev/null
@@ -160,7 +183,8 @@ P
     # Relinking the files inside Papirus kept the theme NAME, and running apps kept their cached folders (Dolphin had to
     # be restarted). A different theme name is a real icon-theme change: every toolkit reloads.
     if [ -n "$FC" ]; then DER="$($PY "$ROOT/tools/folder_theme.py" "$ICONS" "$FC" 2>/dev/null || true)"; [ -n "$DER" ] && ICONS="$DER"; fi
-    for h in /usr/lib/x86_64-linux-gnu/libexec/plasma-changeicons /usr/lib/libexec/plasma-changeicons /usr/libexec/plasma-changeicons; do [ -x "$h" ] && { "$h" "$ICONS" >/dev/null 2>&1 || true; break; }; done
+    done_icons=0; for h in /usr/lib/x86_64-linux-gnu/libexec/plasma-changeicons /usr/lib/libexec/plasma-changeicons /usr/libexec/plasma-changeicons /usr/lib64/libexec/plasma-changeicons /usr/lib/plasma-changeicons "$(qtpaths6 --query QT_INSTALL_LIBEXECS 2>/dev/null)/plasma-changeicons"; do [ -x "$h" ] && { "$h" "$ICONS" >/dev/null 2>&1 || true; done_icons=1; break; }; done
+    [ $done_icons = 1 ] || kwriteconfig6 --file kdeglobals --group Icons --key Theme "$ICONS"      # no changer found (Arch keeps it in /usr/lib): the key at least, apps pick it up on restart
     gsettings set org.gnome.desktop.interface icon-theme "$ICONS" 2>/dev/null || true
     # Dolphin keeps the pictures of the items it has already drawn, whatever the icon theme does: ask every open window to
     # reload its view (its own Reload action, exported on D-Bus like every KDE action; the location and tabs stay)

@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QObject>
 #include <QFileSystemWatcher>
+#include <QJsonObject>
 #include <QTimer>
 #include <QQuickWindow>
 #include <QVariantList>
@@ -92,6 +93,8 @@ public:
     // Settings page actions that are programs, not config keys (folder colour script, wallpaper). Detached, no shell.
     Q_INVOKABLE bool runDetached(const QString &program, const QStringList &arguments);
     Q_INVOKABLE QString homePath() const;
+    Q_INVOKABLE QString picturesPath() const;                    // the user's Pictures folder (xdg-user-dirs), not a literal ~/Pictures
+    Q_INVOKABLE QString toolPath(const QString &name) const;     // one of our scripts: on PATH, else in the installed checkout's scripts/, else ~/.local/bin; "" if nowhere
     // bumps whenever config.json changes on disk (from the settings window, an editor, anything): Config.qml re-reads, so
     // every design token is live
     // is Plasma's desktop shell on the bus? (our wallpaper layer shows by itself only when it is not)
@@ -116,6 +119,7 @@ public Q_SLOTS:
     Q_SCRIPTABLE void toggleLobe(const QString &name) { Q_EMIT lobeToggleRequested(name); }
     Q_SCRIPTABLE void openTrayMenu(int index) { Q_EMIT trayMenuRequested(index); }      // menu of the n-th visible tray icon (scripts, tests)
     Q_SCRIPTABLE void openSettings() { Q_EMIT settingsRequested(); }
+    Q_SCRIPTABLE void openSettingsPage(int page) { Q_EMIT settingsPageRequested(page); }   // a bar widget sends you to its section
     Q_SCRIPTABLE void togglePowerMenu() { Q_EMIT shortcutActivated(QStringLiteral("power")); }
     Q_SCRIPTABLE void tileActive(double xFraction, double widthFraction) { tileActiveWindow(xFraction, widthFraction); }   // e.g. 0.25 0.5 = centred half
     Q_SCRIPTABLE void toggleTiles() { Q_EMIT shortcutActivated(QStringLiteral("tiles")); }
@@ -148,6 +152,7 @@ Q_SIGNALS:
     void lobeToggleRequested(const QString &name);
     void searchPreviewRequested(const QString &query);
     void settingsRequested();
+    void settingsPageRequested(int page);
     void trayMenuRequested(int index);
     void configRevisionChanged();
     void plasmaRunningChanged();
@@ -166,8 +171,11 @@ private:
     QHash<uint, QString> m_notifyPaths;                          // our notifications that open a folder when clicked
     bool m_notifyListening = false;
     void watchConfig();
+    QJsonObject readConfigObject() const;
+    void writeConfigObject(const QJsonObject &o);                   // atomic (QSaveFile); bumps configRevision itself
     QFileSystemWatcher m_configWatcher;
     QTimer m_configDebounce;
+    QByteArray m_ownConfigBytes;                                    // what we last wrote: the watcher's echo of it is ignored
     int m_configRevision = 0;
     bool m_plasmaRunning = false;
     bool m_withoutPlasmashell = false;

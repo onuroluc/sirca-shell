@@ -49,18 +49,27 @@ void main()
     // the key were read as "darker than the surface" and made denser: a near-black line round each corner.
     vec2 texel = 1.0 / vec2(textureSize(sampler, 0));
     float nearHole = 0.0, tNear = 0.0, tLow = 1.0, tLow2 = 1.0;
-    for (int i = 0; i < 8; ++i) {
-        float ang = float(i) * 0.7853982;
-        vec4 nb = texture(sampler, texcoord0 + vec2(cos(ang), sin(ang)) * texel * 1.5);
-        vec3 nbp = nb.a > 0.0 ? nb.rgb / nb.a : nb.rgb;
-        nearHole = max(nearHole, 1.0 - smoothstep(0.02, 0.12, length(nbp - M) + (1.0 - nb.a)));
-        // the strongest ink nearby (see inkLevel below); two rings, so the inside of a 2-3 px stroke is reached
-        float nt = dot(nbp - keyContent, d) / dot(d, d);
-        tLow = min(tLow, length(nbp - (keyContent + nt * d)) < 0.10 ? nt : 1.0);
-        vec3 nb2 = texture(sampler, texcoord0 + vec2(cos(ang), sin(ang)) * texel * 3.0).rgb;
-        float nt2 = dot(nb2 - keyContent, d) / dot(d, d);
-        tLow2 = min(tLow2, length(nb2 - (keyContent + nt2 * d)) < 0.10 ? nt2 : 1.0);
-        tNear = max(tNear, max(nt * step(length(nbp - (keyContent + nt * d)), 0.10), dot(nb2 - keyContent, d) / dot(d, d) * step(length(nb2 - (keyContent + dot(nb2 - keyContent, d) / dot(d, d) * d)), 0.10)));
+    // The 16 taps only matter for a pixel that is near the hole or carries ink; for the bare surface (most of every
+    // window) the defaults give the same result exactly: nearHole reaches the output only through
+    // edge = ... * smoothstep(0.01, 0.04, h), which is 0 for h <= 0.01; tLow / tLow2 only through
+    // panel = smoothstep(0.042, 0.072, min(t, ...)), 0 for t <= 0.042 whatever the neighbours; tNear only through
+    // inkLevel, which is moot while c == 0 (t <= base, and base >= 0.035). With h <= 0.01 holeMix is exactly 0 below,
+    // so t is the value computed here.
+    float t0 = dot(p - keyContent, d) / dot(d, d);
+    if (h > 0.01 || t0 > 0.035) {
+        for (int i = 0; i < 8; ++i) {
+            float ang = float(i) * 0.7853982;
+            vec4 nb = texture(sampler, texcoord0 + vec2(cos(ang), sin(ang)) * texel * 1.5);
+            vec3 nbp = nb.a > 0.0 ? nb.rgb / nb.a : nb.rgb;
+            nearHole = max(nearHole, 1.0 - smoothstep(0.02, 0.12, length(nbp - M) + (1.0 - nb.a)));
+            // the strongest ink nearby (see inkLevel below); two rings, so the inside of a 2-3 px stroke is reached
+            float nt = dot(nbp - keyContent, d) / dot(d, d);
+            tLow = min(tLow, length(nbp - (keyContent + nt * d)) < 0.10 ? nt : 1.0);
+            vec3 nb2 = texture(sampler, texcoord0 + vec2(cos(ang), sin(ang)) * texel * 3.0).rgb;
+            float nt2 = dot(nb2 - keyContent, d) / dot(d, d);
+            tLow2 = min(tLow2, length(nb2 - (keyContent + nt2 * d)) < 0.10 ? nt2 : 1.0);
+            tNear = max(tNear, max(nt * step(length(nbp - (keyContent + nt * d)), 0.10), dot(nb2 - keyContent, d) / dot(d, d) * step(length(nb2 - (keyContent + dot(nb2 - keyContent, d) / dot(d, d) * d)), 0.10)));
+        }
     }
     // Where the arc runs into the straight edge the magenta sliver is thinner than a texel: no neighbour is PURE magenta, and
     // two purple specks per corner were left. Inside the window's corner squares (nothing but the surface and the hole can

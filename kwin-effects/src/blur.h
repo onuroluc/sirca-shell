@@ -11,12 +11,14 @@
 #ifndef GLASS_X11
 #include "core/region.h"
 #endif
+#include "core/colorspace.h"
 #include "opengl/glutils.h"
 #include "scene/item.h"
 #include "settings.h"
 
 #include <QList>
 #include <QStringList>
+#include <QVariantMap>
 #include <QHash>
 #include <QVariantList>
 
@@ -76,6 +78,18 @@ struct BlurEffectData
      * Corner radius reported by the window before this effect overrides it.
      */
     std::optional<BorderRadius> originalCornerRadius;
+
+    /**
+     * The radius this effect last wrote with setBorderRadius(), so its own write is told apart from the window
+     * declaring a new one (borderRadiusChanged fires for both).
+     */
+    std::optional<BorderRadius> appliedCornerRadius;
+
+    /**
+     * Sirca Shell lobes: "class:WxH" of a dock window, refreshed with the blur region (class and frame size changes
+     * both re-run updateBlurRegion); empty for anything that is not a dock.
+     */
+    QString lobeKey;
 };
 
 class BlurEffect : public KWin::Effect
@@ -130,6 +144,7 @@ public Q_SLOTS:
     Q_SCRIPTABLE void clearLobes(const QString &appId, int width, int height);
     void slotWindowAdded(KWin::EffectWindow *w);
     void slotWindowDeleted(KWin::EffectWindow *w);
+    void slotUPowerPropertiesChanged(const QString &interface, const QVariantMap &changed, const QStringList &invalidated);
     void slotOutputRemoved(KWin::BlurOutput *output);
 #if KWIN_BUILD_X11
     void slotPropertyNotify(KWin::EffectWindow *w, long atom);
@@ -146,6 +161,10 @@ private:
     };
 
     void initBlurStrengthValues();
+    void applySettings();
+    int effectiveQualityTier() const;
+    void watchBattery();
+    void setOnBattery(bool onBattery);
     BlurRegion contentRegion(EffectWindow *w, const BorderRadius *fallbackCornerRadius = nullptr) const;
     BlurRegion blurRegion(EffectWindow *w, const BorderRadius *fallbackCornerRadius = nullptr) const;
     BlurRegion roundedContentRegion(const QRect &rect, const BorderRadius &cornerRadius, qreal leftSideWidth, qreal rightSideWidth, qreal topHeight, qreal bottomHeight) const;
@@ -157,7 +176,9 @@ private:
     void updateBlurRegion(EffectWindow *w);
     void repaintDynamicCorners();
     void blur(const RenderTarget &renderTarget, const RenderViewport &viewport, EffectWindow *w, int mask, const BlurRegion &deviceRegion, WindowPaintData &data);
-    GLTexture *ensureNoiseTexture(int noiseStrength);
+    GLTexture *ensureNoiseTexture();
+    void updateTargetColors(const std::shared_ptr<ColorDescription> &target);
+    void setConstantUniforms();
     QMatrix4x4 colorMatrix(const float &brightness, const float &saturation, const float &contrast) const;
     BlurPipelineSettings pipelineSettingsForStrength(int blurStrength, int noiseStrength) const;
 
@@ -192,6 +213,7 @@ private:
         int autoTintAlphaLocation;
 
         int glowColorLocation;
+        int rimColorLocation;
         int glowStrengthLocation;
         int edgeLightingLocation;
         int lobeCountLocation;
@@ -222,14 +244,23 @@ private:
         std::unique_ptr<GLShader> shader;
         int mvpMatrixLocation;
         int noiseTextureSizeLocation;
+        int noiseScaleLocation;
 
         std::unique_ptr<GLTexture> noiseTexture;
         qreal noiseTextureScale = 1.0;
-        int noiseTextureStength = 0;
     } m_noisePass;
 
     BlurSettings m_settings;
     bool m_valid = false;
+    // tint / glow / rim white converted from sRGB into the render target's encoding (see glass.glsl); the target's
+    // ColorDescription is a shared object that KWin replaces when the output changes, so its identity is the cache key.
+    struct
+    {
+        std::shared_ptr<ColorDescription> description;
+        QVector3D tint;
+        QVector3D glow;
+        QVector3D rim;
+    } m_targetColors;
 #if KWIN_BUILD_X11
     long net_wm_blur_region = 0;
 #endif
@@ -238,6 +269,10 @@ private:
     BlurOutput *m_currentOutput = nullptr;
 
     QMatrix4x4 m_colorMatrix;
+    float m_tintAlpha = 0.0f; // alpha of the configured tint / glow colours, parsed once in reconfigure()
+    float m_glowAlpha = 0.0f;
+    float m_refractionStrength = 0.0f; // the configured strength, or 0 under a reduced quality tier
+    bool m_onBattery = false; // UPower's OnBattery (system bus), false when UPower is not there
     int m_expandSize;
     float m_blurRadius = 1.0f;
     float m_upsampleOffset = 1.0f;
@@ -245,7 +280,15 @@ private:
     BlurPipelineSettings m_contentBlurSettings{};
     BlurPipelineSettings m_decorationBlurSettings{};
     BlurPipelineSettings m_dockBlurSettings{};
-    struct LobeShape { QList<QRectF> rects; double radius = 22; double fillet = 14; };
+    struct LobeShape
+    {
+        QList<QRectF> rects;
+        double radius = 22;
+        double fillet = 14;
+        bool operator==(const LobeShape &o) const { return rects == o.rects && qFuzzyCompare(radius, o.radius) && qFuzzyCompare(fillet, o.fillet); }
+    };
+    static QString lobeKeyFor(const EffectWindow *w);
+    void repaintLobeWindows(const QString &key);
     QHash<QString, LobeShape> m_lobeShapes;
     QStringList m_windowClasses;
     bool m_whitelist;
@@ -272,6 +315,7 @@ private:
     QMap<EffectWindow *, QMetaObject::Connection> windowContrastChangedConnections;
 #endif
     QMap<EffectWindow *, QMetaObject::Connection> windowFrameGeometryChangedConnections;
+    QMap<EffectWindow *, QMetaObject::Connection> windowBorderRadiusChangedConnections;
     std::unordered_map<EffectWindow *, BlurEffectData> m_windows;
 
 #if !defined(GLASS_X11) && !defined(GLASS_KWIN_67)

@@ -115,6 +115,28 @@ Window {
                             Rectangle { width: cnt.implicitWidth + 24; height: 28; radius: 14; color: Config.fg(cnh.hovered ? 0.16 : 0.09)
                                 Text { id: cnt; anchors.centerIn: parent; text: "Check now"; color: Config.ink; font.pixelSize: 12 }
                                 HoverHandler { id: cnh; cursorShape: Qt.PointingHandCursor } TapHandler { onTapped: Shell.checkForUpdate(true) } } } }
+                    Section { title: "Weather"
+                        Row_ { label: "Weather"; hint: "Open-Meteo, every 30 min, no account. Placing the bar widget switches it on too"; key: "weather"
+                            GlassSwitch { checked: Config.weatherOn; onToggled: on => win.setKey("weather", on, true) } }
+                        Row_ { label: "Location"; hint: Weather.locationName !== "" ? Weather.locationName : "Type a town and pick a hit"; key: "weatherLocation"; height: 58 + (places.count > 0 ? placeCol.implicitHeight + 8 : 0)
+                            Column { id: placeCol; spacing: 8
+                                Rectangle { width: 260; height: 30; radius: 15; color: Config.fg(0.07); border.width: 1; border.color: Config.fg(placeField.activeFocus ? 0.3 : 0.12)
+                                    TextInput { id: placeField; anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; verticalAlignment: TextInput.AlignVCenter; color: Config.ink; font.pixelSize: 13; clip: true; selectByMouse: true
+                                        onTextEdited: placeTimer.restart(); onAccepted: Weather.searchPlace(text)
+                                        Text { anchors.fill: parent; verticalAlignment: Text.AlignVCenter; text: "Town or city"; color: Config.inkDim; font.pixelSize: 13; visible: placeField.text === "" && !placeField.activeFocus } } }
+                                Timer { id: placeTimer; interval: 450; onTriggered: Weather.searchPlace(placeField.text) }
+                                Connections { target: Weather; function onPlacesFound(list) { places.clear(); for (const p of list) places.append(p) } }
+                                ListModel { id: places }
+                                Repeater { model: places
+                                    Rectangle { id: hit; required property var model; width: 260; height: 30; radius: 15; color: Config.fg(hh.hovered ? 0.14 : 0.05)
+                                        Text { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; color: Config.ink; font.pixelSize: 12
+                                            text: hit.model.name + (hit.model.region ? ", " + hit.model.region : "") + (hit.model.country ? " · " + hit.model.country : "") }
+                                        HoverHandler { id: hh; cursorShape: Qt.PointingHandCursor }
+                                        TapHandler { onTapped: { Shell.saveConfigKeys({ weatherLocation: { lat: hit.model.lat, lon: hit.model.lon, name: hit.model.name }, weather: true }); places.clear(); placeField.text = "" } } } } } }
+                        Row_ { label: "Units"; key: "weatherUnits"
+                            Row { spacing: 8
+                                Chip { text: "°C"; on: Config.get("weatherUnits", "c") !== "f"; onTapped: win.setKey("weatherUnits", "c", true) }
+                                Chip { text: "°F"; on: Config.get("weatherUnits", "c") === "f"; onTapped: win.setKey("weatherUnits", "f", true) } } } }
                     Section { title: "Notifications"
                         Row_ { label: "Native notifications"; hint: "Cards and history drawn by the shell. Off = the hosted Plasma applet"; key: "nativeNotifications"
                             GlassSwitch { checked: Config.nativeNotifications; onToggled: on => win.setKey("nativeNotifications", on, true) } } }
@@ -144,6 +166,8 @@ Window {
                     Section { title: "Windows"
                         Row_ { label: "Dodge windows"; hint: "Bar and dock slide away under windows instead of reserving space"; key: "dodge"
                             GlassSwitch { checked: Config.dodge; onToggled: on => win.setKey("dodge", on, true) } }
+                        Row_ { label: "Snap zones"; hint: "While you drag a window a strip of layouts appears under the bar; drop on one to tile the window there"; key: "snapZones"
+                            GlassSwitch { checked: Config.get("snapZones", true) !== false; onToggled: on => win.setKey("snapZones", on, true) } }
                         Row_ { label: "Record sound"; hint: "Screen recordings include what the computer plays. The microphone is never recorded"; key: "recordSound"
                             GlassSwitch { checked: Config.recordSound; onToggled: on => win.setKey("recordSound", on, true) } }
                         Row_ { label: "Live level meter"; hint: "The now-playing bars follow the real sound level. Redraws the bar about 25 times a second while music plays (about 1-2 % GPU here); off = still bars"; key: "levelMeter"
@@ -193,6 +217,6 @@ Window {
                     Section { title: "Sirca Shell"
                         Row_ { label: "Config file"; Text { text: Shell.configPath(); color: Config.inkDim; font.pixelSize: 12 } }
                         Row_ { label: "Changed settings"; Text { text: Config.user ? Object.keys(Config.user).filter(k => k !== "launchers").length + " keys" : "0 keys"; color: Config.inkDim; font.pixelSize: 12 } }
-                        Row_ { label: "Reload the shell"; hint: "Checks the build first; a broken build is refused"; Chip { text: "Reload"; onTapped: Shell.runDetached(Shell.homePath() + "/.local/bin/sirca-shell-reload", []) } } } }
+                        Row_ { label: "Reload the shell"; hint: "Checks the build first; a broken build is refused"; Chip { text: "Reload"; enabled: Shell.toolPath("sirca-shell-reload") !== ""; opacity: enabled ? 1 : 0.4; onTapped: { const p = Shell.toolPath("sirca-shell-reload"); if (p !== "") Shell.runDetached(p, []) } } } } }
             } } }
 }

@@ -1,4 +1,5 @@
 #include "trayhost.h"
+#include <memory>
 #include <QCoreApplication>
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -92,11 +93,24 @@ static QImage bestPixmap(const SniImageList &list)
 // ---- one item -----------------------------------------------------------------------------------------------------
 TrayItem::TrayItem(const QString &service, const QString &path, QObject *parent) : QObject(parent), m_service(service), m_path(path)
 {
+    // every change signal fetches only what it announces (a GetAll on each one re-read every icon pixmap; an app that
+    // animates its icon sends NewIcon several times a second)
     auto bus = QDBusConnection::sessionBus();
-    for (const char *sig : {"NewIcon", "NewAttentionIcon", "NewOverlayIcon", "NewTitle", "NewToolTip", "NewStatus", "NewMenu"})
-        bus.connect(service, path, kItemIface, QLatin1String(sig), this, SLOT(refresh()));
+    bus.connect(service, path, kItemIface, QStringLiteral("NewIcon"), this, SLOT(onNewIcon()));
+    bus.connect(service, path, kItemIface, QStringLiteral("NewAttentionIcon"), this, SLOT(onNewAttentionIcon()));
+    bus.connect(service, path, kItemIface, QStringLiteral("NewTitle"), this, SLOT(onNewTitle()));
+    bus.connect(service, path, kItemIface, QStringLiteral("NewToolTip"), this, SLOT(onNewToolTip()));
+    bus.connect(service, path, kItemIface, QStringLiteral("NewStatus"), this, SLOT(onNewStatus()));
+    bus.connect(service, path, kItemIface, QStringLiteral("NewMenu"), this, SLOT(onNewMenu()));
     refresh();
 }
+
+void TrayItem::onNewIcon() { fetch({QStringLiteral("IconName"), QStringLiteral("IconPixmap")}); }
+void TrayItem::onNewAttentionIcon() { fetch({QStringLiteral("AttentionIconName"), QStringLiteral("AttentionIconPixmap")}); }
+void TrayItem::onNewTitle() { fetch({QStringLiteral("Title")}); }
+void TrayItem::onNewToolTip() { fetch({QStringLiteral("ToolTip")}); }
+void TrayItem::onNewStatus() { fetch({QStringLiteral("Status")}); }
+void TrayItem::onNewMenu() { fetch({QStringLiteral("Menu")}); }
 
 void TrayItem::refresh()
 {
@@ -107,42 +121,65 @@ void TrayItem::refresh()
         w->deleteLater();
         QDBusPendingReply<QVariantMap> r = *w;
         if (r.isError()) return;
-        const QVariantMap p = r.value();
-        m_id = p.value(QStringLiteral("Id")).toString();
-        m_status = p.value(QStringLiteral("Status"), QStringLiteral("Active")).toString();
-        m_itemIsMenu = p.value(QStringLiteral("ItemIsMenu")).toBool();
-        m_menuPath = p.value(QStringLiteral("Menu")).value<QDBusObjectPath>().path();
-        m_title = p.value(QStringLiteral("Title")).toString();
-        if (m_title.isEmpty()) {                                       // Discord: no Title, but a ToolTip (sa(iiay)ss)
-            const QDBusArgument tip = p.value(QStringLiteral("ToolTip")).value<QDBusArgument>();
-            if (tip.currentType() == QDBusArgument::StructureType) { QString ic, t, sub; SniImageList im; tip.beginStructure(); tip >> ic >> im >> t >> sub; tip.endStructure(); m_title = t; }
-        }
-        if (m_title.isEmpty()) m_title = m_id;
-
-        const bool attention = m_status == QLatin1String("NeedsAttention");
-        QString name = attention ? p.value(QStringLiteral("AttentionIconName")).toString() : QString();
-        if (name.isEmpty()) name = p.value(QStringLiteral("IconName")).toString();
-        const QString themePath = p.value(QStringLiteral("IconThemePath")).toString();
-        m_iconIsFile = false;
-        QString icon;
-        if (name.startsWith(QLatin1Char('/')) && QFileInfo::exists(name)) { icon = QStringLiteral("file://") + name; m_iconIsFile = true; }
-        else if (!name.isEmpty() && !themePath.isEmpty()) {             // an app's private icon folder (Steam)
-            for (const QString &rel : {QStringLiteral("%1.svg"), QStringLiteral("%1.png"), QStringLiteral("hicolor/scalable/apps/%1.svg"), QStringLiteral("hicolor/48x48/apps/%1.png"),
-                                       QStringLiteral("hicolor/32x32/apps/%1.png"), QStringLiteral("hicolor/24x24/apps/%1.png"), QStringLiteral("hicolor/22x22/apps/%1.png")}) {
-                const QString f = QDir(themePath).filePath(rel.arg(name));
-                if (QFileInfo::exists(f)) { icon = QStringLiteral("file://") + f; m_iconIsFile = true; break; }
-            }
-        }
-        if (icon.isEmpty() && !name.isEmpty()) icon = name;
-        if (icon.isEmpty()) {
-            const QString field = attention ? QStringLiteral("AttentionIconPixmap") : QStringLiteral("IconPixmap");
-            QImage img = bestPixmap(qdbus_cast<SniImageList>(p.value(field).value<QDBusArgument>()));
-            if (img.isNull() && attention) img = bestPixmap(qdbus_cast<SniImageList>(p.value(QStringLiteral("IconPixmap")).value<QDBusArgument>()));
-            if (!img.isNull()) { TrayImageProvider::store(key(), img); icon = QStringLiteral("image://tray/%1?%2").arg(key()).arg(++m_rev); m_iconIsFile = true; }
-        }
-        m_icon = icon;
-        Q_EMIT changed();
+        m_props = r.value();
+        apply();
     });
+}
+
+// the named properties, one Properties.Get each; the item is re-derived once every answer is in
+void TrayItem::fetch(const QStringList &names)
+{
+    auto pending = std::make_shared<int>(names.size());
+    for (const QString &name : names) {
+        QDBusMessage m = QDBusMessage::createMethodCall(m_service, m_path, QStringLiteral("org.freedesktop.DBus.Properties"), QStringLiteral("Get"));
+        m << kItemIface << name;
+        auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(m, 2000), this);
+        connect(w, &QDBusPendingCallWatcher::finished, this, [this, name, pending](QDBusPendingCallWatcher *w) {
+            w->deleteLater();
+            QDBusPendingReply<QDBusVariant> r = *w;
+            if (!r.isError()) m_props.insert(name, r.value().variant());
+            if (--*pending == 0) apply();
+        });
+    }
+}
+
+void TrayItem::apply()
+{
+    const QVariantMap &p = m_props;
+    m_id = p.value(QStringLiteral("Id")).toString();
+    m_status = p.value(QStringLiteral("Status"), QStringLiteral("Active")).toString();
+    m_itemIsMenu = p.value(QStringLiteral("ItemIsMenu")).toBool();
+    m_menuPath = p.value(QStringLiteral("Menu")).value<QDBusObjectPath>().path();
+    m_title = p.value(QStringLiteral("Title")).toString();
+    if (m_title.isEmpty()) {                                       // Discord: no Title, but a ToolTip (sa(iiay)ss)
+        const QDBusArgument tip = p.value(QStringLiteral("ToolTip")).value<QDBusArgument>();
+        if (tip.currentType() == QDBusArgument::StructureType) { QString ic, t, sub; SniImageList im; tip.beginStructure(); tip >> ic >> im >> t >> sub; tip.endStructure(); m_title = t; }
+    }
+    if (m_title.isEmpty()) m_title = m_id;
+
+    const bool attention = m_status == QLatin1String("NeedsAttention");
+    QString name = attention ? p.value(QStringLiteral("AttentionIconName")).toString() : QString();
+    if (name.isEmpty()) name = p.value(QStringLiteral("IconName")).toString();
+    const QString themePath = p.value(QStringLiteral("IconThemePath")).toString();
+    m_iconIsFile = false;
+    QString icon;
+    if (name.startsWith(QLatin1Char('/')) && QFileInfo::exists(name)) { icon = QStringLiteral("file://") + name; m_iconIsFile = true; }
+    else if (!name.isEmpty() && !themePath.isEmpty()) {             // an app's private icon folder (Steam)
+        for (const QString &rel : {QStringLiteral("%1.svg"), QStringLiteral("%1.png"), QStringLiteral("hicolor/scalable/apps/%1.svg"), QStringLiteral("hicolor/48x48/apps/%1.png"),
+                                   QStringLiteral("hicolor/32x32/apps/%1.png"), QStringLiteral("hicolor/24x24/apps/%1.png"), QStringLiteral("hicolor/22x22/apps/%1.png")}) {
+            const QString f = QDir(themePath).filePath(rel.arg(name));
+            if (QFileInfo::exists(f)) { icon = QStringLiteral("file://") + f; m_iconIsFile = true; break; }
+        }
+    }
+    if (icon.isEmpty() && !name.isEmpty()) icon = name;
+    if (icon.isEmpty()) {
+        const QString field = attention ? QStringLiteral("AttentionIconPixmap") : QStringLiteral("IconPixmap");
+        QImage img = bestPixmap(qdbus_cast<SniImageList>(p.value(field).value<QDBusArgument>()));
+        if (img.isNull() && attention) img = bestPixmap(qdbus_cast<SniImageList>(p.value(QStringLiteral("IconPixmap")).value<QDBusArgument>()));
+        if (!img.isNull()) { TrayImageProvider::store(key(), img); icon = QStringLiteral("image://tray/%1?%2").arg(key()).arg(++m_rev); m_iconIsFile = true; }
+    }
+    m_icon = icon;
+    Q_EMIT changed();
 }
 
 static void callItem(const QString &service, const QString &path, const QString &method, const QVariantList &args)

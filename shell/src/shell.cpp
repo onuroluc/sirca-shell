@@ -14,7 +14,6 @@
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
 #include <QDBusServiceWatcher>
-#include <QDBusInterface>
 #include <QDBusMessage>
 #include <QDBusReply>
 #include <QDBusVariant>
@@ -35,6 +34,7 @@
 #include <KConfigGroup>
 #include <KSharedConfig>
 #include <QElapsedTimer>
+#include <QSaveFile>
 #include <QScopeGuard>
 #include <QPainterPath>
 #include <QRegion>
@@ -70,6 +70,8 @@ static const GlassShortcut kShortcuts[] = {
     {"tiles",          "Tile Picker",              "Meta+A",        "",                        "plasmashell", "next activity"},      // handed back on exit
     {"clipboard",      "Clipboard History",        "Meta+V",        "",                        "plasmashell", "show-on-mouse-pos"},   // Klipper's key, handed back on exit
     {"search",         "Search",                   "Meta+Space",    "",                        "",     ""},          // ours alone: nothing to hand back
+    {"cheatsheet",     "Shortcut Cheat Sheet",     "Meta+/",        "",                        "",     ""},          // ours alone
+    {"notif-clear",    "Clear Notifications",      "Meta+Shift+N",  "",                        "",     ""},          // ours alone
     {"dock-1", "Dock Entry 1", "Meta+1", "", "plasmashell", "activate task manager entry 1"},
     {"dock-2", "Dock Entry 2", "Meta+2", "", "plasmashell", "activate task manager entry 2"},
     {"dock-3", "Dock Entry 3", "Meta+3", "", "plasmashell", "activate task manager entry 3"},
@@ -269,8 +271,11 @@ void Shell::setSceneRegions(QQuickWindow *window, const QVariantList &panels, co
 
 QVariant Shell::dbusCall(const QString &service, const QString &path, const QString &iface, const QString &method, const QVariantList &args)
 {
-    QDBusInterface i(service, path, iface, QDBusConnection::sessionBus());
-    QDBusMessage reply = i.callWithArgumentList(QDBus::Block, method, args);
+    // a plain message, not a QDBusInterface: that one introspects the object first (a second round trip, blocking too), and
+    // a service that is busy or gone must not hold the shell for the default 25 s
+    QDBusMessage m = QDBusMessage::createMethodCall(service, path, iface, method);
+    m.setArguments(args);
+    const QDBusMessage reply = QDBusConnection::sessionBus().call(m, QDBus::Block, 500);
     if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) return {};
     const QVariant first = reply.arguments().first();
     if (first.userType() == qMetaTypeId<QDBusVariant>()) return first.value<QDBusVariant>().variant();   // Properties.Get
@@ -328,23 +333,42 @@ void Shell::setShapePolygon(QQuickWindow *window, const QVariantList &points, co
     window->setMask(mask);
 }
 
-void Shell::saveConfigKeys(const QVariantMap &values)
+QJsonObject Shell::readConfigObject() const
+{
+    QFile f(configPath());
+    if (f.open(QIODevice::ReadOnly)) return QJsonDocument::fromJson(f.readAll()).object();
+    return {};
+}
+
+// Every write of config.json goes through here: a QSaveFile writes next to it and renames over it, so a reader (the
+// shell itself through its watcher, glass-mode, a hand-started settings window) never sees a half-written file. The
+// revision is bumped right away; the watcher's own notifications for this write are ignored (see watchConfig).
+void Shell::writeConfigObject(const QJsonObject &o)
 {
     QDir().mkpath(QFileInfo(configPath()).absolutePath());
-    QJsonObject o;
-    { QFile f(configPath()); if (f.open(QIODevice::ReadOnly)) o = QJsonDocument::fromJson(f.readAll()).object(); }
+    QSaveFile f(configPath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { qWarning("sirca-shell: cannot write %s", qPrintable(configPath())); return; }
+    const QByteArray bytes = QJsonDocument(o).toJson();
+    f.write(bytes);
+    m_ownConfigBytes = bytes;
+    if (!f.commit()) { qWarning("sirca-shell: cannot replace %s", qPrintable(configPath())); return; }
+    // announced from the event loop, not from inside the caller (a QML handler that has just written a key must not have
+    // every Config binding re-evaluated under its feet; the watcher route used to arrive 30 ms later)
+    QTimer::singleShot(0, this, [this] { ++m_configRevision; Q_EMIT configRevisionChanged(); });
+}
+
+void Shell::saveConfigKeys(const QVariantMap &values)
+{
+    QJsonObject o = readConfigObject();
     for (auto it = values.begin(); it != values.end(); ++it) o.insert(it.key(), QJsonValue::fromVariant(it.value()));
-    QFile f(configPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson());
+    writeConfigObject(o);
 }
 
 void Shell::removeConfigKeys(const QStringList &keys)
 {
-    QJsonObject o;
-    { QFile f(configPath()); if (f.open(QIODevice::ReadOnly)) o = QJsonDocument::fromJson(f.readAll()).object(); }
+    QJsonObject o = readConfigObject();
     for (const QString &k : keys) o.remove(k);
-    QFile f(configPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson());
+    writeConfigObject(o);
 }
 
 QVariantMap Shell::sysStats()
@@ -364,12 +388,9 @@ QVariantMap Shell::sysStats()
 
 void Shell::saveConfigKey(const QString &key, const QVariant &value)
 {
-    QDir().mkpath(QFileInfo(configPath()).absolutePath());
-    QJsonObject o;
-    { QFile f(configPath()); if (f.open(QIODevice::ReadOnly)) o = QJsonDocument::fromJson(f.readAll()).object(); }
+    QJsonObject o = readConfigObject();
     o.insert(key, QJsonValue::fromVariant(value));
-    QFile f(configPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson());
+    writeConfigObject(o);
 }
 
 void Shell::dbusListen(const QString &service, const QString &path, const QString &iface, const QString &signal)
@@ -429,7 +450,7 @@ void Shell::setupWallpaper(QQuickWindow *window, bool takesInput)
 QString Shell::plasmaWallpaper() const
 {
     // the last Image= of Plasma's desktop containments is the one for the current activity on a single screen
-    QFile f(QDir::homePath() + QStringLiteral("/.config/plasma-org.kde.plasma.desktop-appletsrc"));
+    QFile f(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/plasma-org.kde.plasma.desktop-appletsrc"));
     QString found;
     if (f.open(QIODevice::ReadOnly)) {
         const QList<QByteArray> lines = f.readAll().split('\n');
@@ -503,7 +524,7 @@ bool Shell::hasProgram(const QString &name) const { return !QStandardPaths::find
 bool Shell::kwinHasAction(const QString &action) const
 {
     QDBusMessage m = QDBusMessage::createMethodCall(QStringLiteral("org.kde.kglobalaccel"), QStringLiteral("/component/kwin"), QStringLiteral("org.kde.kglobalaccel.Component"), QStringLiteral("shortcutNames"));
-    const QDBusReply<QStringList> r = QDBusConnection::sessionBus().call(m, QDBus::Block, 800);
+    const QDBusReply<QStringList> r = QDBusConnection::sessionBus().call(m, QDBus::Block, 500);
     return r.isValid() && r.value().contains(action);
 }
 
@@ -523,7 +544,7 @@ void Shell::tileActiveWindow(double xFraction, double widthFraction)
     const QString svc = QStringLiteral("org.kde.KWin"), path = QStringLiteral("/Scripting"), iface = QStringLiteral("org.kde.kwin.Scripting");
     { QDBusMessage u = QDBusMessage::createMethodCall(svc, path, iface, QStringLiteral("unloadScript")); u.setArguments({name}); bus.call(u, QDBus::Block, 500); }
     QDBusMessage l = QDBusMessage::createMethodCall(svc, path, iface, QStringLiteral("loadScript")); l.setArguments({file, name});
-    const QDBusReply<int> id = bus.call(l, QDBus::Block, 1000);
+    const QDBusReply<int> id = bus.call(l, QDBus::Block, 500);
     if (!id.isValid() || id.value() < 0) return;
     bus.call(QDBusMessage::createMethodCall(svc, QStringLiteral("/Scripting/Script%1").arg(id.value()), QStringLiteral("org.kde.kwin.Script"), QStringLiteral("run")), QDBus::NoBlock);
     QTimer::singleShot(1500, this, [name] { QDBusMessage u = QDBusMessage::createMethodCall(QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"), QStringLiteral("org.kde.kwin.Scripting"), QStringLiteral("unloadScript")); u.setArguments({name}); QDBusConnection::sessionBus().call(u, QDBus::NoBlock); });
@@ -634,7 +655,10 @@ void Shell::watchConfig()
     m_configDebounce.setSingleShot(true);
     m_configDebounce.setInterval(30);
     connect(&m_configDebounce, &QTimer::timeout, this, [this, file] {
-        if (QFile::exists(file) && !m_configWatcher.files().contains(file)) m_configWatcher.addPath(file);   // editors replace the file
+        if (QFile::exists(file) && !m_configWatcher.files().contains(file)) m_configWatcher.addPath(file);   // editors (and our QSaveFile) replace the file
+        // our own write already bumped the revision when it was made; its inotify echo must not reload everything a second
+        // time. Judged by content, not by time: glass-mode writes the file right after our "mode" write, and that must count.
+        if (!m_ownConfigBytes.isEmpty()) { QFile f(file); if (f.open(QIODevice::ReadOnly) && f.readAll() == m_ownConfigBytes) return; }
         ++m_configRevision;
         Q_EMIT configRevisionChanged();
     });
@@ -646,12 +670,10 @@ void Shell::watchConfig()
 
 void Shell::removeConfigKey(const QString &key)
 {
-    QJsonObject o;
-    { QFile f(configPath()); if (f.open(QIODevice::ReadOnly)) o = QJsonDocument::fromJson(f.readAll()).object(); }
+    QJsonObject o = readConfigObject();
     if (!o.contains(key)) return;
     o.remove(key);
-    QFile f(configPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson());
+    writeConfigObject(o);
 }
 
 bool Shell::runDetached(const QString &program, const QStringList &arguments)
@@ -660,6 +682,18 @@ bool Shell::runDetached(const QString &program, const QStringList &arguments)
 }
 
 QString Shell::homePath() const { return QDir::homePath(); }
+QString Shell::picturesPath() const { return QStandardPaths::writableLocation(QStandardPaths::PicturesLocation); }
+
+static QString installedRoot();
+QString Shell::toolPath(const QString &name) const
+{
+    const QString onPath = QStandardPaths::findExecutable(name);
+    if (!onPath.isEmpty()) return onPath;
+    const QString root = installedRoot();
+    if (!root.isEmpty() && QFileInfo::exists(root + QStringLiteral("/scripts/") + name)) return root + QStringLiteral("/scripts/") + name;
+    const QString local = QDir::homePath() + QStringLiteral("/.local/bin/") + name;
+    return QFileInfo::exists(local) ? local : QString();
+}
 
 void Shell::setWithoutPlasmashell(bool on) { if (on == m_withoutPlasmashell) return; m_withoutPlasmashell = on; updateOsdClaim(); }
 bool Shell::servesOsd() const { return m_osd && m_osd->claimed(); }
@@ -685,24 +719,43 @@ QString Shell::primaryScreenName() const
 // right click on the desktop opened Plasma's menu). workspace.raiseWindow from a KWin script does put ours on top.
 void Shell::raiseWallpaper()
 {
-    // A persistent KWin script: whenever a window is activated or added and plasmashell's desktop window has come out above
-    // our wallpaper (a click on the desktop activates and raises it), raise ours again. Loaded once; unloaded on the next start.
-    const QString path = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + QStringLiteral("/sirca-shell-raise-wallpaper.js");
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
-    f.write("const cls = \"" + QCoreApplication::applicationName().toUtf8() + "\";\n"
-            "function fix() { const st = workspace.stackingOrder; let ours = null, oi = -1, theirs = -1;\n"
-            "  for (let i = 0; i < st.length; i++) { const w = st[i]; if (w.resourceClass == cls && w.layer == 0 && !w.desktopWindow && w.frameGeometry.width >= 64) { ours = w; oi = i; } else if (w.desktopWindow) theirs = Math.max(theirs, i); }\n"
-            "  if (ours && theirs > oi) workspace.raiseWindow(ours); }\n"
-            "workspace.windowActivated.connect(function () { fix(); }); workspace.windowAdded.connect(function () { fix(); }); fix();\n");   // (no stackingOrderChanged in KWin scripting; a desktop click ACTIVATES Plasma's desktop window, which is when it comes up)
-    f.close();
+    // A persistent KWin script: whenever plasmashell's desktop window is activated or added (a click on the desktop
+    // activates and raises it), or our own wallpaper is mapped again, and Plasma's desktop has come out above our
+    // wallpaper, raise ours again. Loaded once per compositor session: when it is already loaded there is nothing to do
+    // (its windowAdded handler sees the re-mapped wallpaper). Everything below is asynchronous: KWin answers these calls
+    // slowly while it is busy, and a blocking call here stalled the shell for the whole wait.
     const QString name = QStringLiteral("sirca-shell-raise-wallpaper");
-    QDBusInterface scripting(QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting"), QStringLiteral("org.kde.kwin.Scripting"));
-    scripting.call(QStringLiteral("unloadScript"), name);
-    const QDBusReply<int> id = scripting.call(QStringLiteral("loadScript"), path, name);
-    if (!id.isValid() || id.value() < 0) return;
-    QDBusInterface script(QStringLiteral("org.kde.KWin"), QStringLiteral("/Scripting/Script") + QString::number(id.value()), QStringLiteral("org.kde.kwin.Script"));
-    script.call(QStringLiteral("run"));
+    const QString svc = QStringLiteral("org.kde.KWin"), spath = QStringLiteral("/Scripting"), iface = QStringLiteral("org.kde.kwin.Scripting");
+    QDBusMessage q = QDBusMessage::createMethodCall(svc, spath, iface, QStringLiteral("isScriptLoaded"));
+    q.setArguments({name});
+    auto *w = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(q, 500), this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [this, name, svc, spath, iface](QDBusPendingCallWatcher *w) {
+        w->deleteLater();
+        const QDBusPendingReply<bool> loaded = *w;
+        if (loaded.isValid() && loaded.value()) return;
+        const QString path = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation) + QStringLiteral("/sirca-shell-raise-wallpaper.js");
+        QFile f(path);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return;
+        // fix() walks the whole stacking order, so it only runs for the two windows that matter: Plasma's desktop window,
+        // and our wallpaper being (re)mapped. (No stackingOrderChanged in KWin scripting.)
+        f.write("const cls = \"" + QCoreApplication::applicationName().toUtf8() + "\";\n"
+                "function isOurs(w) { return w.resourceClass == cls && w.layer == 0 && !w.desktopWindow && w.frameGeometry.width >= 64; }\n"
+                "function fix() { const st = workspace.stackingOrder; let ours = null, oi = -1, theirs = -1;\n"
+                "  for (let i = 0; i < st.length; i++) { const w = st[i]; if (isOurs(w)) { ours = w; oi = i; } else if (w.desktopWindow) theirs = Math.max(theirs, i); }\n"
+                "  if (ours && theirs > oi) workspace.raiseWindow(ours); }\n"
+                "function onWindow(w) { if (w && (w.desktopWindow || isOurs(w))) fix(); }\n"
+                "workspace.windowActivated.connect(onWindow); workspace.windowAdded.connect(onWindow); fix();\n");
+        f.close();
+        QDBusMessage l = QDBusMessage::createMethodCall(svc, spath, iface, QStringLiteral("loadScript"));
+        l.setArguments({path, name});
+        auto *w2 = new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(l, 1000), this);
+        connect(w2, &QDBusPendingCallWatcher::finished, this, [svc](QDBusPendingCallWatcher *w2) {
+            w2->deleteLater();
+            const QDBusPendingReply<int> id = *w2;
+            if (!id.isValid() || id.value() < 0) return;
+            QDBusConnection::sessionBus().asyncCall(QDBusMessage::createMethodCall(svc, QStringLiteral("/Scripting/Script") + QString::number(id.value()), QStringLiteral("org.kde.kwin.Script"), QStringLiteral("run")), 1000);
+        });
+    });
 }
 
 // ---- update check ---------------------------------------------------------------------------------------------------

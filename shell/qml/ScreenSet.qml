@@ -9,7 +9,11 @@ import SircaShell
 
 QtObject {
     id: set
-    property var screen: null                    // a QScreen (Qt.application.screens[i])
+    property string screenName: ""               // the output this set belongs to (Main's list model row)
+    property var screen: null                    // its QScreen, looked up by name; kept while the name is gone (the set is being destroyed then)
+    function findScreen() { for (const s of Qt.application.screens) if (s.name === screenName) { screen = s; return } }
+    onScreenNameChanged: findScreen()
+    property var _screens: Connections { target: Qt.application; function onScreensChanged() { set.findScreen() } }   // a re-plugged output is a new QScreen with the old name
     property var host: null                      // the root (Main.qml). Not named "main": a property called main shadows the id
     readonly property string name: screen ? screen.name : ""
     readonly property bool primary: name === Shell.primaryScreenName
@@ -32,7 +36,7 @@ QtObject {
         recorder: set.host.recorder; editing: set.host.editing; onEditRequested: set.host.setEditing(true)
         quiet: set.host.fullscreenActive; busy: set.host.fullscreenActive || set.host.gameActive; showingDesktop: set.host.showingDesktop
         activeTitle: set.host.activeTitle; activeApp: set.host.activeApp; activeIcon: set.host.activeIcon
-        onOpenLobeChanged: if (openLobe !== "") set.host.launcherOpen = false
+        onOpenLobeChanged: if (openLobe !== "") set.host.closeLauncher()
         onShowDesktopRequested: set.host.toggleShowDesktop()
         covered: { set.host.rev; return !set.host.showingDesktop && set.host.overlaps(Qt.rect(set.ox + x + sidePad, set.oy, barW, strutSize)) } } }
     readonly property var _cDock: Component { Dock { screen: set.screen; userHidden: !set.wantDock
@@ -50,6 +54,6 @@ QtObject {
         _syncing = false
     }
     onWantBarChanged: sync(); onWantDockChanged: sync(); onPrimaryChanged: sync(); onHostChanged: sync(); onScreenChanged: sync()
-    Component.onCompleted: sync()
+    Component.onCompleted: { findScreen(); sync() }
     Component.onDestruction: { if (bar) bar.destroy(); if (dock) dock.destroy(); if (wallpaper) wallpaper.destroy() }
 }

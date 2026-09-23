@@ -48,7 +48,7 @@ Window {
         sw.requestUpdate() }
     onPanelChanged: if (visible) shapeLater.restart()
 
-    LobeShape { anchors.fill: parent; bar: sw.panel }
+    LobeShape { anchors.fill: parent; bar: sw.panel; reach: Qt.rect(sw.panel.x, sw.panel.y, sw.panelW, sw.fieldH + 470 + 40) }   // reach: the tallest the panel gets (listH's cap), so its spring does not resize the shadow layers per frame
     ClipboardContent { id: content; x: sw.panel.x; y: sw.panel.y; width: sw.panel.width; height: sw.panel.height; opacity: sw.show; transform: Translate { y: (1 - sw.show) * 10 }
         entries: sw.entries; fieldH: sw.fieldH
         onPicked: row => sw.pick(row); onCloseRequested: sw.close_() }

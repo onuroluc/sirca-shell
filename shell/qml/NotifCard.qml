@@ -14,7 +14,8 @@ Item {
     property var actionNames: []
     property var actionLabels: []
     property bool hasDefaultAction: false
-    property bool critical: false
+    property bool critical: false                     // the accent edge on the left; a critical popup also stays until it is dismissed
+    property bool low: false                          // low priority: the card is dimmer
     property bool canReply: false
     property string replyPlaceholder: ""
     property string age: ""                           // history only
@@ -34,17 +35,20 @@ Item {
     height: content.implicitHeight + (compact ? 20 : 26)
     property bool replying: false
 
+    opacity: low ? 0.72 : 1
     Rectangle { anchors.fill: parent; radius: 16
         color: Config.fg(hh.hovered ? 0.085 : 0.055); border.width: 1
-        border.color: card.critical ? Qt.rgba(229/255, 72/255, 77/255, 0.55) : Config.fg(hh.hovered ? 0.16 : 0.09)
+        border.color: card.critical ? Qt.rgba(Config.accent.r, Config.accent.g, Config.accent.b, 0.55) : Config.fg(hh.hovered ? 0.16 : 0.09)
         Behavior on color { ColorAnimation { duration: Config.quick } } }
+    // critical: a bar of the accent along the left edge, inside the rounded corners
+    Rectangle { visible: card.critical; x: 6; y: 12; width: 3; height: parent.height - 24; radius: 1.5; color: Config.accent }
     HoverHandler { id: hh }
     // A tap on the close button, an action or "reply" is NOT a tap on the card. Pointer handlers all see the same tap (the
     // inner one does not swallow it), so closing a "screenshot saved" card also ran its default action and opened the folder.
     property int overControls: 0                      // how many of the card's own buttons the pointer is over
     TapHandler { enabled: card.hasDefaultAction && !card.replying && card.overControls === 0; onTapped: card.defaultInvoked() }
 
-    Column { id: content; x: 14; y: card.compact ? 10 : 13; width: parent.width - 28; spacing: 6
+    Column { id: content; x: card.critical ? 18 : 14; y: card.compact ? 10 : 13; width: parent.width - (card.critical ? 32 : 28); spacing: 6
         // app line
         Item { width: parent.width; height: 16
             Kirigami.Icon { id: aIcon; width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter; source: card.appIcon || "preferences-desktop-notification"; roundToIconSize: false }
@@ -91,6 +95,7 @@ Item {
                 onAccepted: if (text !== "") { card.replied(text); card.replying = false; text = "" }
                 Keys.onEscapePressed: { card.replying = false; text = "" } } }
     }
-    // time left, along the bottom
-    Rectangle { visible: card.timeLeft >= 0; x: 16; y: parent.height - 3; height: 2; radius: 1; width: (parent.width - 32) * Math.max(0, card.timeLeft); color: Config.fg(0.45) }
+    // time left, along the bottom. timeLeft moves every frame; the width is on whole pixels so the item is only dirtied (and
+    // the bar surface only repainted) when the line visibly changes: once per pixel of its length rather than at 240 Hz.
+    Rectangle { visible: card.timeLeft >= 0; x: 16; y: parent.height - 3; height: 2; radius: 1; width: Math.round((parent.width - 32) * Math.max(0, card.timeLeft)); color: Config.fg(0.45) }
 }

@@ -6,6 +6,7 @@
 #pragma once
 #include <QObject>
 #include <QProcess>
+#include <QTimer>
 #include <qqmlintegration.h>
 
 class RecorderProcess : public QObject
@@ -17,18 +18,19 @@ class RecorderProcess : public QObject
 public:
     explicit RecorderProcess(QObject *parent = nullptr);
     ~RecorderProcess() override;
-    bool running() const { return m_rec.state() != QProcess::NotRunning || converting(); }
+    bool running() const { return m_probing || m_rec.state() != QProcess::NotRunning || converting(); }
     bool converting() const { return m_conv.state() != QProcess::NotRunning; }
     Q_INVOKABLE bool start(int x, int y, int w, int h, const QString &file, bool sound);
     Q_INVOKABLE void stop();                                   // finishes the file; finished() follows (after converting)
 Q_SIGNALS:
     void runningChanged();
-    void finished(int code);                                   // 0 ok, -2 recorder missing, other: see the journal
+    void finished(int code);                                   // 0 ok, -2 recorder missing, -3 ffmpeg missing, other: see the journal
 private:
     void convert(bool gpu);
-    static bool hdrOn();
-    QProcess m_rec, m_conv;
+    void startRecording();                                     // after the HDR probe
+    QProcess m_rec, m_conv, m_probe;
+    QTimer m_probeLimit;
     QString m_file, m_master;
-    bool m_hdr = false, m_triedGpu = false;
-    int m_width = 0;
+    bool m_hdr = false, m_triedGpu = false, m_probing = false, m_sound = false;
+    int m_width = 0, m_x = 0, m_y = 0, m_h = 0;
 };

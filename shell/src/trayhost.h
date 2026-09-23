@@ -40,11 +40,16 @@ public:
     Q_INVOKABLE void fetchMenu();                                      // answers with menuReady()
     Q_INVOKABLE void menuEvent(int id);                                // "clicked"
 public Q_SLOTS:
-    void refresh();
+    void refresh();                                                    // everything (GetAll): on creation
+private Q_SLOTS:
+    void onNewIcon(); void onNewAttentionIcon(); void onNewTitle(); void onNewToolTip(); void onNewStatus(); void onNewMenu();
 Q_SIGNALS:
     void changed();
     void menuReady(const QVariantList &entries);
 private:
+    void fetch(const QStringList &names);                              // only these properties, then apply()
+    void apply();                                                      // derive title / status / icon from m_props
+    QVariantMap m_props;                                               // the item's properties as last read
     QString m_service, m_path, m_id, m_title, m_status = QStringLiteral("Active"), m_icon, m_menuPath;
     bool m_iconIsFile = false, m_itemIsMenu = false;
     int m_rev = 0;

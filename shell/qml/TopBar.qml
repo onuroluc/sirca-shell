@@ -17,8 +17,11 @@ Surface {
     // ---- width: scaled to the monitor, the whole screen, as wide as the widgets need, or a fixed number (bar.barWMode)
     readonly property int screenW: Screen.width > 0 ? Screen.width : Config.screenWidth
     readonly property int fitW: Math.round(Math.max(480, Math.min(screenW - 16, 2 * Math.max(barContent.leftW, barContent.rightW) + barContent.centerW + 56)))
+    // (barWMode was read but never declared until 2026-09-23, so "fill" and "fit" silently behaved as the custom width)
+    readonly property string barWMode: Config.barWidthMode
     readonly property int barW: bar.barWMode === "fill" ? screenW - 2 * Config.barFillMargin
                               : bar.barWMode === "fit" ? fitW
+                              : bar.barWMode === "auto" ? Math.min(screenW, Config.barWidthAutoFor(screenW))
                               : Math.min(screenW, Config.barWidth)
     property bool editing: false                // edit mode: widgets become chips (see the edit overlay in barContent)
     signal editRequested()
@@ -47,10 +50,13 @@ Surface {
     property var recorder: null                // Main's Recorder: the bar shows a pill while it records
     signal showDesktopRequested()
     property bool busy: false                  // a full-screen window or a game has focus: notifications do not pop up (Config.quietWhenBusy)
-    property string openLobe: ""             // "" | "tray" | "clock" | "gear" | "media"  (the launcher lives in the dock)
+    property string openLobe: ""             // "" | "tray" | "clock" | "gear" | "media" | "notif" | "disks" | "system"  (the launcher lives in the dock)
+    readonly property alias notifications: notifCenter   // Main's "notif-clear" shortcut reaches clearAll() through this
     readonly property string clockFormat: (Config.clock24h ? "HH:mm" : "h:mm") + (Config.clockSeconds ? ":ss" : "") + (Config.clock24h ? "" : " AP")
     function clockString() { const d = new Date(); return (Config.clockDate ? Qt.formatDate(d, Config.dateFormat) + "   " : "") + Qt.formatTime(d, clockFormat) }
     function toggle(name) { openLobe = (openLobe === name) ? "" : name }
+    // quick settings, opened on its Sound page (the privacy widget): the panel is built on demand if it is not yet
+    function openSoundPage() { warm = true; const q = controlLoader.item; if (q && q.page !== undefined) q.page = "sound"; openLobe = "gear" }
 
     // a hosted applet's own preferred size, clamped; fallbacks until it has loaded
     function prefW(host, fallback) { const f = (host && host.appletItem) ? host.appletItem.fullRepresentationItem : null; return (f && f.Layout && f.Layout.preferredWidth > 0) ? Math.min(f.Layout.preferredWidth, 900) + 2 * Config.lobePad : fallback + 2 * Config.lobePad }
@@ -107,7 +113,9 @@ Surface {
     property Item notifItem: null
     readonly property Item cardsItem: Config.nativeNotifications ? nativeCards : (notifItem ? notifItem.glassCardsItem : null)
     readonly property int cardCount: (openLobe === "notif") ? 0 : (Config.nativeNotifications ? nativeCards.count : (notifItem ? notifItem.glassCardCount : 0))   // no popups over the open history
-    Timer { running: !bar.notifItem && !Config.nativeNotifications; interval: 1500; repeat: true; onTriggered: bar.notifItem = Shell.appletItem("onur.glassnotifications") }
+    // (the hosted applet appears a few seconds after start-up at most; after 20 tries = 30 s it is not coming, so the poll stops)
+    Timer { running: !bar.notifItem && !Config.nativeNotifications && tries < 20; interval: 1500; repeat: true; property int tries: 0
+        onTriggered: { bar.notifItem = Shell.appletItem("onur.glassnotifications"); tries++ } }
     onCardsItemChanged: if (cardsItem && !Config.nativeNotifications) { cardsItem.parent = cardsContent; cardsItem.x = Config.lobePad; cardsItem.y = Config.lobePad; cardsItem.visible = true }
     readonly property real cardsW: cardsItem ? cardsItem.width + 2 * Config.lobePad : 380
     readonly property real cardsFullH: cardCount > 0 && cardsItem ? Math.min(cardsItem.height + 2 * Config.lobePad, Config.sheetHeight) : 0
@@ -136,18 +144,35 @@ Surface {
     property real notifX: sidePad + bar.barW - notifW - 40
     property real gearX: sidePad + bar.barW - gearW - 40
     property real clockX: sidePad + (bar.barW - clockW) / 2
-    function refreshAnchors() { notifX = under(bell, notifW); gearX = under(gear, gearW); clockX = under(clockBox, clockW) }
+    function refreshAnchors() { notifX = under(bell, notifW); gearX = under(gear, gearW); clockX = under(clockBox, clockW); disksX = under(disksBtn, disksW); sysmonX = under(sysW, sysmonW) }
     onNotifWChanged: if (openLobe !== "notif") notifX = under(bell, notifW); else notifX = Math.min(notifX, sidePad + bar.barW - 40 - notifW)
     onGearWChanged: gearX = under(gear, gearW)
     onClockWChanged: clockX = under(clockBox, clockW)
     onBarWChanged: refreshAnchors()
     readonly property rect notifRect: Qt.rect(notifX, topY + barH, notifW, notifH)
+    // removable disks lobe (RemovableMedia): only there while a removable drive is plugged in
+    readonly property real disksW: disksPanel.implicitWidth + 2 * Config.lobePad
+    readonly property real disksFullH: disksPanel.implicitHeight + 2 * Config.lobePad
+    property real disksH: openLobe === "disks" ? disksFullH : 0
+    Behavior on disksH { Spring {} }
+    readonly property bool disksUp: disksH > 1
+    property real disksX: sidePad + bar.barW - disksW - 40
+    onDisksWChanged: disksX = under(disksBtn, disksW)
+    readonly property rect disksRect: Qt.rect(disksX, topY + barH, disksW, disksH)
+    // system monitor lobe (SysMon.qml) under the CPU / memory widget; its readers only run while it is open
+    readonly property real sysmonW: sysmonPanel.implicitWidth + 2 * Config.lobePad
+    readonly property real sysmonFullH: Math.min(sysmonPanel.implicitHeight + 2 * Config.lobePad, Config.sheetHeight)
+    property real sysmonH: openLobe === "system" ? sysmonFullH : 0
+    Behavior on sysmonH { Spring {} }
+    readonly property bool sysmonUp: sysmonH > 1
+    property real sysmonX: sidePad + bar.barW - sysmonW - 40
+    readonly property rect sysmonRect: Qt.rect(sysmonX, topY + barH, sysmonW, sysmonH)
     property real gearH: openLobe === "gear" ? gearFullH : 0
     Behavior on clockH { Spring {} }
     Behavior on gearH { Spring {} }
     // now-playing lobe: native panel under the media widget, kept clear of the bar's right end
-    readonly property real mediaW: mediaPanel.implicitWidth + 2 * Config.lobePad
-    readonly property real mediaFullH: mediaPanel.implicitHeight + 2 * Config.lobePad
+    readonly property real mediaW: (mediaPanel.item ? mediaPanel.item.implicitWidth : 0) + 2 * Config.lobePad
+    readonly property real mediaFullH: (mediaPanel.item ? mediaPanel.item.implicitHeight : 0) + 2 * Config.lobePad
     property real mediaH: openLobe === "media" ? mediaFullH : 0
     Behavior on mediaH { Spring {} }
     readonly property bool mediaUp: mediaH > 1
@@ -169,8 +194,9 @@ Surface {
         id: shape
         anchors.fill: parent
         bar: bar.barRect
+        reach: bar.polygon                 // the fully grown outline: the shadow layers are sized once per open/close, not per frame
         tint: Config.barTint; rim: Qt.rgba(1, 1, 1, Config.barRimAlpha * Config.mixn(1, 3.2)); sheen: Config.barSheen * Config.mixn(1, 2.5); shadowStrength: Config.barShadow   // literal-ok: the rim is white light in both modes
-        lobes: [{ x: trayRect.x, w: trayRect.width, h: trayH }, { x: clockRect.x, w: clockRect.width, h: clockH }, { x: gearRect.x, w: gearRect.width, h: gearH }, { x: notifRect.x, w: notifRect.width, h: notifH }, { x: mediaRect.x, w: mediaRect.width, h: mediaH }, { x: cardsRect.x, w: cardsRect.width, h: cardsH }]
+        lobes: [{ x: trayRect.x, w: trayRect.width, h: trayH }, { x: clockRect.x, w: clockRect.width, h: clockH }, { x: gearRect.x, w: gearRect.width, h: gearH }, { x: notifRect.x, w: notifRect.width, h: notifH }, { x: disksRect.x, w: disksRect.width, h: disksH }, { x: sysmonRect.x, w: sysmonRect.width, h: sysmonH }, { x: mediaRect.x, w: mediaRect.width, h: mediaH }, { x: cardsRect.x, w: cardsRect.width, h: cardsH }]
         onPolygonChanged: bar.pushShape()
     }
     // blur region + input mask: the fully grown outline of whatever is open (or still closing)
@@ -183,6 +209,8 @@ Surface {
         { x: clockX, w: clockW, h: clockUp ? clockFullH + Config.bounceRoom : 0 },
         { x: gearX, w: gearW, h: gearUp ? gearFullH + Config.bounceRoom : 0 },
         { x: notifX, w: notifW, h: notifUp ? notifFullH + Config.bounceRoom : 0 },
+        { x: disksX, w: disksW, h: disksUp ? disksFullH + Config.bounceRoom : 0 },
+        { x: sysmonX, w: sysmonW, h: sysmonUp ? sysmonFullH + Config.bounceRoom : 0 },
         { x: mediaAnchorX, w: mediaW, h: mediaUp ? mediaFullH + Config.bounceRoom : 0 },
         { x: cardsX, w: cardsW, h: cardsUp ? cardsMaskH + Config.bounceRoom : 0 }], false, 14)
     // The Glass KWin effect draws its bevel/outline from the same boxes (org.kde.KWin /Glass, effect fork branch "lobes")
@@ -191,13 +219,13 @@ Surface {
         let boxes = [barRect.x, barRect.y, barRect.width, barRect.height];
         // lobe boxes reach up into the bar: their own rounded top corners must hide inside it, or they notch the junction
         const up = Math.min(Config.cornerRadius, barH - 15);
-        for (const r of [trayRect, clockRect, gearRect, notifRect, mediaRect, cardsRect]) if (r.height > 1) boxes = boxes.concat([r.x, r.y - up, r.width, r.height + up]);
+        for (const r of [trayRect, clockRect, gearRect, notifRect, disksRect, sysmonRect, mediaRect, cardsRect]) if (r.height > 1) boxes = boxes.concat([r.x, r.y - up, r.width, r.height + up]);
         Shell.dbusSendTyped("org.kde.KWin", "/Glass", "org.kde.KWin.Glass", "setLobes", "siivdd", ["sirca-shell", bar.width, bar.height, boxes, Config.cornerRadius, shape.fillet * 1.17]);
     }
     Component.onCompleted: {
         Shell.setKeyboardMode(bar, "none");
         pushShape();
-        for (const n of ["clock", "gear", "media", "notif"]) if (Qt.application.arguments.indexOf("--open-" + n) >= 0) openLobe = n;
+        for (const n of ["clock", "gear", "media", "notif", "system"]) if (Qt.application.arguments.indexOf("--open-" + n) >= 0) openLobe = n;
         if (Qt.application.arguments.indexOf("--open-tray") >= 0) openTrayLater.start();
         if (Qt.application.arguments.indexOf("--test-showdesktop") >= 0) sdTest.start();
     }
@@ -207,12 +235,18 @@ Surface {
 
     // ---- colour haze, same idea as the dock: a blurred, saturated copy of everything in the bar (tray icons, the focused
     // app's icon, cover art, glyphs, text) lies under the content and inside the glass outline.
+    // The haze layer and its mask cover the bar plus the blur's reach (40 px), not the whole surface (which is the bar plus
+    // a sheet's worth of lobe room): the haze cannot exist further from the bar than its blur radius anyway. The mask's
+    // Shape is shifted back so the outline (in surface coordinates) lands in the right place; mask and layer are the same
+    // size, so they line up pixel for pixel. Whole pixels: a layer that changes size is re-allocated.
+    readonly property rect hazeRect: { const r = 40; const x = Math.max(0, Math.floor(barContent.x - r)), y = Math.max(0, Math.floor(barContent.y - r))
+        return Qt.rect(x, y, Math.max(1, Math.min(Math.ceil(width), Math.ceil(barContent.x + barContent.width + r)) - x), Math.max(1, Math.min(Math.ceil(height), Math.ceil(barContent.y + barContent.height + r)) - y)) }
     Item {
-        anchors.fill: parent
+        x: bar.hazeRect.x; y: bar.hazeRect.y; width: bar.hazeRect.width; height: bar.hazeRect.height
         visible: Config.barHazeStrength > 0.01
         layer.enabled: true
         layer.effect: MultiEffect { maskEnabled: true; maskSource: barHazeMask; maskThresholdMin: 0.5; maskSpreadAtMin: 1.0 }
-        MultiEffect { x: barContent.x; y: barContent.y; width: barContent.width; height: barContent.height
+        MultiEffect { x: barContent.x - bar.hazeRect.x; y: barContent.y - bar.hazeRect.y; width: barContent.width; height: barContent.height
             source: barHazeSrc; autoPaddingEnabled: true
             blurEnabled: true; blur: 1.0; blurMax: 40; saturation: Config.dark ? 0.6 : 1.6; brightness: Config.dark ? 0.05 : 0.18
             opacity: Math.min(1, Config.barHazeStrength * 2.2) }
@@ -226,8 +260,8 @@ Surface {
         Image { readonly property point at: { island.x; island.width; return island.coverItem ? island.coverItem.mapToItem(island, 0, 0) : Qt.point(0, 0) }
             visible: island.visible && island.coverUrl !== ""; x: island.x + at.x; y: island.y + at.y; width: 19; height: 19; source: island.coverUrl; sourceSize: Qt.size(76, 76); fillMode: Image.PreserveAspectCrop }
     }
-    Item { id: barHazeMask; anchors.fill: parent; visible: false; layer.enabled: true
-        Shape { anchors.fill: parent; preferredRendererType: Shape.CurveRenderer
+    Item { id: barHazeMask; x: bar.hazeRect.x; y: bar.hazeRect.y; width: bar.hazeRect.width; height: bar.hazeRect.height; visible: false; layer.enabled: true
+        Shape { x: -bar.hazeRect.x; y: -bar.hazeRect.y; width: bar.width; height: bar.height; preferredRendererType: Shape.CurveRenderer
             ShapePath { strokeWidth: -1; fillColor: "black"; PathSvg { path: shape.pathData } } } }
 
     // ---- bar content ---------------------------------------------------------------------------
@@ -238,10 +272,18 @@ Surface {
         // that is in no list is hidden; one that has nothing to show right now (no second desktop, nothing playing) takes
         // no room. Positions are computed here instead of anchoring widgets to each other, so any order works.
         function itemOf(n) { switch (n) { case "desktop": return desk; case "workspaces": return workspaces; case "tray": return Config.nativeTray ? nativeTray : hostedTrayLoader
-            case "title": return titleRow; case "clock": return clockBox; case "date": return dateW; case "system": return sysW; case "media": return island; case "bell": return bell; case "gear": return gear } return null }
+            case "title": return titleRow; case "clock": return clockBox; case "date": return dateW; case "system": return sysW; case "media": return island; case "bell": return bell; case "gear": return gear
+            case "battery": return batteryW; case "mic": return micW; case "privacy": return privacyW; case "keyboard": return keyboardW; case "weather": return weatherW; case "disks": return disksBtn }
+            if (n.startsWith("user:")) { for (let i = 0; i < userWidgets.count; ++i) { const it = userWidgets.itemAt(i); if (it && it.name === n.substring(5)) return it } }
+            return null }
         function placed(n) { return Config.barLeft.indexOf(n) >= 0 || Config.barCenter.indexOf(n) >= 0 || Config.barRight.indexOf(n) >= 0 }
         function live(n) { if (!placed(n)) return false
-            if (n === "workspaces") return workspaces.count > 1; if (n === "media") return island.hasTrack; if (n === "bell") return Config.nativeNotifications; return true }
+            if (n === "workspaces") return workspaces.count > 1; if (n === "media") return island.hasTrack; if (n === "bell") return Config.nativeNotifications
+            // widgets that have nothing to say take no room: no battery, nobody recording, nothing private going on, one layout
+            if (n === "battery") return batteryW.shown; if (n === "mic") return micW.shown; if (n === "privacy") return privacyW.shown; if (n === "keyboard") return keyboardW.shown
+            if (n === "weather") return weatherW.hasData || weatherW.pending; if (n === "disks") return disksPanel.count > 0
+            if (n.startsWith("user:")) return userWidgets.count > 0 && !!itemOf(n)   // reads count: the layout re-runs when a widget folder appears
+            return true }
         // the title is elastic: last in its group it takes what is left; followed by other widgets it gets a fixed slot
         function slot(n, last) { if (n === "title") return last ? 0 : Config.titleMaxWidth; const it = itemOf(n); return it ? it.width : 0 }
         readonly property var layout: {
@@ -363,8 +405,11 @@ Surface {
         Text { id: dateW; visible: barContent.placed("date") && !bar.editing; x: barContent.at("date"); anchors.verticalCenter: parent.verticalCenter
             color: Config.ink; font.pixelSize: 13; font.weight: Font.Medium; text: Qt.formatDate(new Date(), Config.dateFormat)
             Timer { interval: 60000; running: dateW.visible; repeat: true; onTriggered: dateW.text = Qt.formatDate(new Date(), Config.dateFormat) } }
+        Rectangle { visible: sysW.visible && Config.barHoverPills; x: sysW.x - 9; anchors.verticalCenter: parent.verticalCenter; width: sysW.width + 18; height: 27; radius: 13.5; color: Config.fg(sysh.hovered && bar.openLobe !== "system" ? 0.07 : 0); Behavior on color { ColorAnimation { duration: Config.quick } } }
         Row { id: sysW; visible: barContent.placed("system") && !bar.editing; x: barContent.at("system"); anchors.verticalCenter: parent.verticalCenter; spacing: 10
             property real cpu: 0; property real mem: 0
+            HoverHandler { id: sysh }
+            TapHandler { onTapped: bar.toggle("system") }               // the system monitor lobe (SysMon.qml)
             Timer { interval: 2000; running: sysW.visible && !bar.quiet; repeat: true; triggeredOnStart: true; onTriggered: { const v = Shell.sysStats(); sysW.cpu = v.cpu; sysW.mem = v.mem } }
             Repeater { model: [ { t: "CPU", k: "cpu" }, { t: "RAM", k: "mem" } ]
                 Row { required property var modelData; spacing: 5; anchors.verticalCenter: parent.verticalCenter
@@ -373,6 +418,23 @@ Surface {
         GlowIcon { id: gear; visible: barContent.placed("gear") && !bar.editing; x: barContent.at("gear"); anchors.verticalCenter: parent.verticalCenter; size: Math.round(22 * Config.barIconScale); source: "configure"; active: bar.openLobe === "gear"; hovered: gh.hovered
             HoverHandler { id: gh }
             TapHandler { onTapped: bar.toggle("gear") } }
+        // ---- status widgets that show only when they have something to say (each a file of its own, see Bar*.qml)
+        // The microphone and privacy widgets share one plasma-pa backend (a PRIVATE Plasma module, by URL: a missing module
+        // leaves them empty, not the bar broken); it is loaded only while one of them is placed.
+        Loader { id: audioL; active: barContent.placed("mic") || barContent.placed("privacy"); source: "VolumeBackend.qml"; onStatusChanged: if (status === Loader.Error) console.warn("bar: microphone state unavailable (org.kde.plasma.private.volume)") }
+        BarBattery { id: batteryW; allowed: barContent.placed("battery") && !bar.editing; x: barContent.at("battery"); anchors.verticalCenter: parent.verticalCenter; onClicked: bar.toggle("gear") }
+        BarMic { id: micW; allowed: barContent.placed("mic") && !bar.editing; audio: audioL.item; x: barContent.at("mic"); anchors.verticalCenter: parent.verticalCenter }
+        BarPrivacy { id: privacyW; allowed: barContent.placed("privacy") && !bar.editing; audio: audioL.item; x: barContent.at("privacy"); anchors.verticalCenter: parent.verticalCenter; onClicked: bar.openSoundPage() }
+        BarKeyboard { id: keyboardW; allowed: barContent.placed("keyboard") && !bar.editing; x: barContent.at("keyboard"); anchors.verticalCenter: parent.verticalCenter }
+        WeatherWidget { id: weatherW; allowed: barContent.placed("weather") && !bar.editing; x: barContent.at("weather"); anchors.verticalCenter: parent.verticalCenter; onClicked: bar.toggle("clock"); onSetupRequested: Shell.openSettingsPage(3) }
+        GlowIcon { id: disksBtn; visible: barContent.live("disks") && !bar.editing; x: barContent.at("disks"); anchors.verticalCenter: parent.verticalCenter; size: Math.round(20 * Config.barIconScale)
+            source: "drive-removable-media-symbolic"; active: bar.openLobe === "disks"; hovered: dkh.hovered
+            HoverHandler { id: dkh }
+            TapHandler { onTapped: bar.toggle("disks") } }
+        // user widgets (~/.config/<app>/widgets/<name>, see examples/widgets), placed like any other widget under the kind "user:<name>"
+        Repeater { id: userWidgets; model: UserWidgets.names
+            UserWidget { required property string modelData; name: modelData; height: parent.height; y: 0; quiet: bar.busy
+                visible: barContent.placed("user:" + name) && !bar.editing; x: barContent.at("user:" + name) } }
     }
 
     // ---- edit mode -------------------------------------------------------------------------------------------------
@@ -439,7 +501,7 @@ Surface {
     Item { x: gearRect.x; y: topY + barH; width: gearRect.width; height: gearH; clip: true; opacity: Math.min(1, gearH / 140)
         Loader { id: controlLoader; active: Config.nativeControl && bar.warm; x: Config.lobePad; y: Config.lobePad; width: bar.gearW - 2 * Config.lobePad; height: bar.gearFullH - 2 * Config.lobePad
             source: Config.quickSettingsStyle === "classic" ? "qrc:/qt/qml/SircaShell/qml/control/ControlPanel.qml" : "QuickSettings.qml"
-            onLoaded: item.expanded = (bar.openLobe === "gear")
+            onLoaded: { item.expanded = (bar.openLobe === "gear"); if (item.busy !== undefined) item.busy = Qt.binding(() => bar.busy) }   // busy: the Caffeine tile's "auto while full-screen"
             Connections { target: bar; function onOpenLobeChanged() { if (controlLoader.item) controlLoader.item.expanded = (bar.openLobe === "gear") } }
             Connections { target: controlLoader.item; ignoreUnknownSignals: true; function onCloseRequested() { if (bar.openLobe === "gear") bar.openLobe = "" }
                 function onOsdRequested(icon, fraction) { clockBox.showLocal(icon, fraction) } } }
@@ -448,12 +510,20 @@ Surface {
                 expanded: bar.openLobe === "gear"
                 onExpandedChanged: if (!expanded && bar.openLobe === "gear") bar.openLobe = "" } } }
 
-    Item { x: mediaRect.x; y: topY + barH; width: mediaRect.width; height: mediaH; clip: true; visible: mediaH > 1; opacity: Math.min(1, mediaH / 140)
-        MediaPanel { id: mediaPanel; mpris: island.model; open: bar.openLobe === "media"; x: Config.lobePad; y: Config.lobePad; width: implicitWidth } }
+    // the container runs up into the bar (short of its top) so the cover's haze is not cut along the bar's bottom edge
+    Item { readonly property real up: Math.max(0, barH - 6)
+        x: mediaRect.x; y: topY + barH - up; width: mediaRect.width; height: mediaH + up; clip: true; visible: mediaH > 1; opacity: Math.min(1, mediaH / 140)
+        // by URL, like the island's source: MediaPanel imports the private MPRIS module; a failure there must not take the bar down
+        Loader { id: mediaPanel; source: "MediaPanel.qml"; x: Config.lobePad; y: Config.lobePad + parent.up
+            onLoaded: { item.mpris = Qt.binding(() => island.model); item.open = Qt.binding(() => bar.openLobe === "media"); item.width = Qt.binding(() => item.implicitWidth); item.hazeUp = Qt.binding(() => parent.up) } } }
     Item { id: cardsContent; x: cardsRect.x; y: topY + barH; width: cardsRect.width; height: cardsH; clip: true; opacity: Math.min(1, cardsH / 60) 
         NotificationCards { id: nativeCards; muted: bar.busy && Config.quietWhenBusy; visible: Config.nativeNotifications; x: Config.lobePad; y: Config.lobePad } }
     Item { x: notifRect.x; y: topY + barH; width: notifRect.width; height: notifH; clip: true; visible: notifH > 1; opacity: Math.min(1, notifH / 140)
         NotificationCenter { id: notifCenter; x: Config.lobePad; y: Config.lobePad; width: implicitWidth; open: bar.openLobe === "notif" } }
+    Item { x: disksRect.x; y: topY + barH; width: disksRect.width; height: disksH; clip: true; visible: disksH > 1; opacity: Math.min(1, disksH / 140)
+        RemovableMedia { id: disksPanel; x: Config.lobePad; y: Config.lobePad; width: implicitWidth; open: bar.openLobe === "disks" } }
+    Item { x: sysmonRect.x; y: topY + barH; width: sysmonRect.width; height: sysmonH; clip: true; visible: sysmonH > 1; opacity: Math.min(1, sysmonH / 140)
+        SysMon { id: sysmonPanel; x: Config.lobePad; y: Config.lobePad; width: implicitWidth; height: implicitHeight; open: bar.openLobe === "system" } }
 
     Shortcut { sequence: "Escape"; onActivated: bar.openLobe = "" }
     Timer { running: Qt.application.arguments.indexOf("--demo") >= 0; interval: 2500; repeat: true

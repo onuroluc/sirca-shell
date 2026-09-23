@@ -11,7 +11,7 @@ case "${1:-}" in
     if [ ! -d "$B" ]; then
       mkdir -p "$B/gtk-3.0" "$B/gtk-4.0"
       for f in "${FILES[@]}"; do [ -e "$C/$f" ] && cp -a "$C/$f" "$B/$f"; done
-      gsettings get org.gnome.desktop.interface gtk-theme > "$B/gtk-theme.txt" 2>/dev/null || true
+      gsettings get org.gnome.desktop.interface gtk-theme > "$B/gtk-theme.txt" 2>/dev/null || true; gsettings get org.gnome.desktop.interface color-scheme > "$B/color-scheme.txt" 2>/dev/null || true
       [ -f "$HOME/.local/share/flatpak/overrides/global" ] && cp "$HOME/.local/share/flatpak/overrides/global" "$B/flatpak-global" || true
     fi
     # GTK 3 base theme: adw-gtk3 (libadwaita's look for GTK 3, same named colours) — bundled copy, user themes dir
@@ -34,6 +34,7 @@ case "${1:-}" in
     for f in "${FILES[@]}"; do if [ -e "$B/$f" ]; then cp -a "$B/$f" "$C/$f"; else rm -f "$C/$f"; fi; done
     old="$(tr -d "'" < "$B/gtk-theme.txt" 2>/dev/null || true)"
     [ -n "$old" ] && { qdbus6 org.kde.GtkConfig /GtkConfig org.kde.GtkConfig.setGtkTheme "$old" >/dev/null 2>&1 || true; gsettings set org.gnome.desktop.interface gtk-theme "$old" 2>/dev/null || true; }
+    cs="$(cat "$B/color-scheme.txt" 2>/dev/null | tr -d "'")"; [ -n "$cs" ] && gsettings set org.gnome.desktop.interface color-scheme "$cs" 2>/dev/null || true
     if command -v flatpak >/dev/null; then
       if [ -f "$B/flatpak-global" ]; then cp "$B/flatpak-global" "$HOME/.local/share/flatpak/overrides/global"; else rm -f "$HOME/.local/share/flatpak/overrides/global"; fi
     fi

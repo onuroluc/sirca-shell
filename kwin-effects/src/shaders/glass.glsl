@@ -1,18 +1,15 @@
+// Constants (rim, tint, highlights) are sRGB values, but the framebuffer is in the OUTPUT's encoding: on an HDR output, or
+// with the brightness turned down, KWin bakes reference luminance and brightness into it. A raw constant therefore never
+// dimmed with the screen (the rim stayed bright when brightness went down). The C++ side converts them once per draw
+// with ColorDescription::mapTo(sRGB -> render target), the same maths as KWin's surface conversion; these three arrive
+// already in the target's encoding.
 uniform vec3 tintColor;
 uniform float tintGray;
 uniform float tintStrength;
 uniform vec2 autoTintAlphaRange;
 uniform int autoTintAlpha;
 uniform vec3 glowColor;
-
-// Constants (rim, tint, highlights) are sRGB values, but the framebuffer is in the OUTPUT's encoding: on an HDR output, or
-// with the brightness turned down, KWin bakes reference luminance and brightness into it. A raw constant therefore never
-// dimmed with the screen (the rim stayed bright when brightness went down). Convert constants like KWin converts a
-// surface; the C++ side feeds the uniforms with setColorspaceUniforms(sRGB -> render target).
-vec3 glassToTarget(vec3 srgb)
-{
-    return nitsToDestinationEncoding(sourceEncodingToNitsInDestinationColorspace(vec4(srgb, 1.0))).rgb;
-}
+uniform vec3 rimColor;      // sRGB white, target-encoded
 uniform float glowStrength;
 uniform int edgeLighting;
 
@@ -77,12 +74,8 @@ struct GlassFragment {
 
 #include "snells-glass.glsl"
 
-vec4 roundedRectangle(vec2 fragCoord, vec3 color, vec4 cornerRadius)
+vec4 roundedRectangle(float dist, vec3 color)
 {
-    vec2 halfblurSize = blurSize * 0.5;
-    vec2 p = fragCoord - halfblurSize;
-    float dist = shapeDist(p, halfblurSize, cornerRadius);
-
     if (dist <= 0.0) {
         return vec4(color, 1.0);
     }
@@ -132,7 +125,7 @@ GlassFragment glassRefraction(vec2 position, vec2 halfBlurSize, vec4 cornerRadiu
 vec3 glassGlow(vec2 position, GlassFragment s)
 {
     float rimMask = clamp(0.25 * s.concaveFactor, 0.0, glowStrength);
-    vec3 glow = mix(s.color.rgb, glassToTarget(glowColor), rimMask);
+    vec3 glow = mix(s.color.rgb, glowColor, rimMask);
     if (edgeLighting == 1) {
         glow += (s.color.rgb * s.concaveFactor);
     }
@@ -152,7 +145,7 @@ vec3 glassOutline(vec2 position, GlassFragment s)
         // Uniform outline all the way around the shape. The original directional masks
         // (bright towards the bottom-left and top-right, dark towards the other two corners)
         // left two of a pill's rounded corners without any highlight.
-        glow = mix(glow, glassToTarget(vec3(1.0)), thicknessShadow * 0.44);   // rim strength (0.7 -> 0.56 -> 0.44, onur 2026-09-20: thinner and less bright). Bar, dock and every popup lobe share it
+        glow = mix(glow, rimColor, thicknessShadow * 0.44);   // rim strength (0.7 -> 0.56 -> 0.44, onur 2026-09-20: thinner and less bright). Bar, dock and every popup lobe share it
     }
 
     return glow;
@@ -174,13 +167,11 @@ float adjustedTintStrength(float baseTintStrength, vec3 backgroundColor)
     return mix(strength, localStrength, useLocal);
 }
 
-vec4 glass(vec4 sum, vec4 cornerRadius)
+// position and dist are the caller's: the SDF is evaluated once per fragment and passed through.
+vec4 glass(vec4 sum, vec4 cornerRadius, vec2 position, float dist)
 {
     vec2 halfBlurSize = blurSize * 0.5;
     float minHalfSize = min(halfBlurSize.x, halfBlurSize.y);
-
-    vec2 position = uv * blurSize - halfBlurSize.xy;
-    float dist = shapeDist(position, halfBlurSize, cornerRadius);
 
     if (dist >= 0.0) {
         return sum;
@@ -191,7 +182,9 @@ vec4 glass(vec4 sum, vec4 cornerRadius)
     float concaveFactor = 1.0 - sqrt(1.0 - pow(smoothstep(0.0, 1.0, edgeFactor), refractionNormalPow));
 
     GlassFragment s;
-    if (refractionStrength > 0.0) {
+    // Refraction only bends light in the edge band: outside it (edgeFactor == 0) both refraction models collapse to a
+    // single tap at uv. Use the 8-tap upsample the caller already paid for there, and refetch only inside the band.
+    if (refractionStrength > 0.0 && edgeFactor > 0.0) {
         vec4 r = clamp(cornerRadius * 2.0, min(64.0, minHalfSize), min(128.0, minHalfSize));
         s = physicallyBasedRefraction == 0
             ? glassRefraction(position, halfBlurSize, r, dist, edgeFactor, concaveFactor)
@@ -201,7 +194,7 @@ vec4 glass(vec4 sum, vec4 cornerRadius)
     }
 
     vec3 rgb = s.concaveFactor < 1.0 ? glassGlow(position, s) : s.color.rgb;
-    s.color.rgb = mix(rgb, glassToTarget(tintColor), adjustedTintStrength(tintStrength, rgb));
+    s.color.rgb = mix(rgb, tintColor, adjustedTintStrength(tintStrength, rgb));
     vec3 final = glassOutline(position, s);
-    return roundedRectangle(uv * blurSize, final, cornerRadius);
+    return roundedRectangle(dist, final);
 }

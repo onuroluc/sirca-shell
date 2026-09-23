@@ -7,5 +7,5 @@ Icon=preferences-desktop-theme
 NoDisplay=true
 Terminal=false
 # KWin only hands these interfaces to programs that ask for them here, and matches this file by the Exec path
-X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_plasma_activation_feedback,zkde_screencast_unstable_v1,org_kde_kwin_fake_input
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management,org_kde_plasma_activation_feedback,zkde_screencast_unstable_v1,org_kde_kwin_fake_input,org_kde_kwin_keystate
 X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

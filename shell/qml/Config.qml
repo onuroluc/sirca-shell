@@ -67,11 +67,13 @@ QtObject {
     readonly property int slow: 320
 
     // top bar
-    // Default bar width follows the monitor: 46.4 % of its width (= 2374 px on the 5120-wide screen this was designed on),
+    // Default bar width follows ITS monitor: 46.4 % of its width (= 2374 px on the 5120-wide screen this was designed on),
     // but never narrower than what the bar's content needs (1400 px) and never wider than the screen minus a margin.
-    // A width set by the user (edit mode / settings) wins.
+    // Each bar passes its own Screen.width to barWidthAutoFor (a second screen is rarely the same size); barWidthAuto is
+    // the primary screen's value, for the settings pages. A width set by the user (edit mode / settings) wins.
     readonly property int screenWidth: Qt.application.screens.length > 0 ? Qt.application.screens[0].width : 1920
-    readonly property int barWidthAuto: Math.round(Math.max(Math.min(1400, screenWidth - 48), Math.min(screenWidth - 48, screenWidth * 0.46367)))
+    function barWidthAutoFor(w) { return Math.round(Math.max(Math.min(1400, w - 48), Math.min(w - 48, w * 0.46367))) }
+    readonly property int barWidthAuto: barWidthAutoFor(screenWidth)
     readonly property int barWidth: get("barWidth", barWidthAuto)
     // "auto" = scaled to the monitor (above), "fill" = the whole screen width minus barFillMargin on each side,
     // "fit" = as wide as its widgets need, "custom" = barWidth from the config
@@ -81,10 +83,15 @@ QtObject {
     readonly property int barSpacing: get("barSpacing", 16)          // air between two widgets
     // which widgets, where, in which order. Names: desktop workspaces tray title clock date system media bell gear
     readonly property var barLeft: get("barLeft", ["desktop", "workspaces", "tray", "title"])
+    // weather (Open-Meteo, network): "weather": true/false decides; with no key, placing the bar widget counts as the opt-in
+    readonly property bool weatherOn: user && user.weather !== undefined ? user.weather === true : (barLeft.indexOf("weather") >= 0 || barCenter.indexOf("weather") >= 0 || barRight.indexOf("weather") >= 0)
     readonly property var barCenter: get("barCenter", ["clock"])
     readonly property var barRight: get("barRight", ["media", "bell", "gear"])
-    readonly property var barWidgetNames: ({ desktop: "Show desktop", workspaces: "Workspaces", tray: "Tray", title: "Window title", clock: "Clock", date: "Date",
-                                             system: "CPU / memory", media: "Now playing", bell: "Notifications", gear: "Quick settings" })
+    // …plus "user:<name>" for every folder in ~/.config/<app>/widgets (UserWidgets, watched: a new widget appears in the edit shelf at once)
+    readonly property var barWidgetNames: { const m = { desktop: "Show desktop", workspaces: "Workspaces", tray: "Tray", title: "Window title", clock: "Clock", date: "Date",
+                                                        system: "CPU / memory", media: "Now playing", bell: "Notifications", gear: "Quick settings", weather: "Weather",
+                                                        battery: "Battery", mic: "Microphone", privacy: "Privacy", keyboard: "Keyboard layout" }
+        const u = UserWidgets.names; for (let i = 0; i < u.length; ++i) m["user:" + u[i]] = UserWidgets.label(u[i]); return m }   // (a QStringList is not iterable with for…of)
     readonly property int titleMaxWidth: get("titleMaxWidth", 420)
     readonly property bool titleIcon: get("titleIcon", true)
     readonly property bool clock24h: get("clock24h", false)
@@ -143,7 +150,7 @@ QtObject {
     // "auto" = only while Plasma's desktop is not running (above it, ours would cover its desktop icons); true / false force it
     readonly property var ownWallpaper: get("ownWallpaper", "auto")
     readonly property string wallpaper: get("wallpaper", "")            // "" = follow what Plasma shows
-    readonly property string wallpaperFolder: get("wallpaperFolder", Shell.homePath() + "/Pictures/Wallpapers")
+    readonly property string wallpaperFolder: get("wallpaperFolder", Shell.picturesPath() + "/Wallpapers")   // the xdg Pictures folder, wherever that is
     // the session runs without plasmashell (set by sirca-shell-switch): the shell serves the volume / brightness display itself
     readonly property bool withoutPlasmashell: get("withoutPlasmashell", false)
     onWithoutPlasmashellChanged: Shell.setWithoutPlasmashell(withoutPlasmashell)

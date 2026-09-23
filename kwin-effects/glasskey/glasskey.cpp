@@ -7,6 +7,9 @@
 #include <KConfigGroup>
 #include <KSharedConfig>
 #include <QColor>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <dlfcn.h>
 #include <QVector2D>
 #include <QVector4D>
 #include <QFile>
@@ -36,14 +39,30 @@ static QVector3D rgb(const KConfigGroup &g, const char *key, const char *fallbac
 GlassKeyEffect::GlassKeyEffect()
 {
     ensureResources();
-    // a shader in ~/.local/share/glass-effect/shaders wins over the built-in one (tuning without a rebuild)
-    QString frag = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QStringLiteral("glass-effect/shaders/glasskey.frag"));
-    if (frag.isEmpty()) frag = QStringLiteral(":/effects/glasskey/glasskey.frag");
+    // a shader in ~/.local/share/glass-effect/shaders/<plugin file name>/ (glasskey4/ for glasskey4.so) wins over the
+    // built-in one (tuning without a rebuild). Per build on purpose: the uniform contract changes between builds and a
+    // flat folder handed a stale shader to a new build (2026-09-23). The embedded one lives under a prefix of its own:
+    // KWin never dlcloses an old plugin build, and the first ":/effects/glasskey/..." registered would shadow every
+    // later build's copy (same trap as the Glass effect's "glass-lobes" prefix).
+    Dl_info info{};
+    QString plugin = QStringLiteral("glasskey");
+    if (dladdr(reinterpret_cast<const void *>(&ensureResources), &info) && info.dli_fname) plugin = QFileInfo(QString::fromLocal8Bit(info.dli_fname)).completeBaseName();
+    QString frag = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QStringLiteral("glass-effect/shaders/") + plugin + QStringLiteral("/glasskey.frag"));
+    if (frag.isEmpty()) frag = QStringLiteral(":/effects/glasskey-lobes/generated/glasskey.frag");
+    qInfo("glasskey: shader %s", qPrintable(frag));
     m_shader = ShaderManager::instance()->generateShaderFromFile(ShaderTrait::MapTexture, QString(), frag);
-    if (!shaderOk()) qWarning("glasskey: the shader failed to load");
+    if (!shaderOk()) {
+        qWarning("glasskey: the shader failed to load");
+    } else {
+        // resolved once: setUniform(const char *) looks the name up in the program on every call
+        m_loc.shadowStrength = m_shader->uniformLocation("shadowStrength");
+        m_loc.texSizePx = m_shader->uniformLocation("texSizePx");
+        m_loc.contentPx = m_shader->uniformLocation("contentPx");
+        m_loc.contentRadius = m_shader->uniformLocation("contentRadius");
+    }
     reconfigure(ReconfigureAll);
     connect(effects, &EffectsHandler::windowAdded, this, &GlassKeyEffect::consider);
-    connect(effects, &EffectsHandler::windowClosed, this, &GlassKeyEffect::forget);
+    // a closing window stays keyed through its close animation: it is forgotten when KWin deletes it, not when it closes
     connect(effects, &EffectsHandler::windowDeleted, this, &GlassKeyEffect::forget);
 }
 
@@ -81,12 +100,18 @@ void GlassKeyEffect::pushUniforms()
 void GlassKeyEffect::consider(EffectWindow *w)
 {
     if (!w || !shaderOk() || !w->window()) return;
-    const bool want = w->isNormalWindow() && (m_classes.contains(w->window()->resourceClass().toLower()) || m_classes.contains(w->window()->resourceName().toLower()));
+    const bool want = w->isNormalWindow() && !w->isFullScreen()
+        && (m_classes.contains(w->window()->resourceClass().toLower()) || m_classes.contains(w->window()->resourceName().toLower()));
     const bool have = m_windows.contains(w);
     if (want && !have) { redirect(w); setShader(w, m_shader.get()); m_windows.append(w); }
     else if (!want && have) { unredirect(w); m_windows.removeAll(w); }
     // some apps name themselves late. (Qt::UniqueConnection does not work with a lambda: connect once per window instead)
-    if (!m_followed.contains(w)) { m_followed.insert(w); connect(w->window(), &Window::windowClassChanged, this, [this, w]() { consider(w); }); }
+    // A full-screen window (a video, a game) is not glass; it comes back when it leaves full screen.
+    if (!m_followed.contains(w)) {
+        m_followed.insert(w);
+        connect(w->window(), &Window::windowClassChanged, this, [this, w]() { consider(w); });
+        connect(w, &EffectWindow::windowFullScreenChanged, this, &GlassKeyEffect::consider);
+    }
 }
 
 // A window WITHOUT a server-side decoration has no window shadow: KWin's shadow is cast by the decoration. A Chromium
@@ -99,10 +124,10 @@ void GlassKeyEffect::drawWindow(const RenderTarget &renderTarget, const RenderVi
         const QRectF e = w->expandedGeometry(), f = w->frameGeometry();
         const bool own = !w->hasDecoration() && e.width() > f.width() + 2 && e.height() > f.height() + 2;
         ShaderBinder binder(m_shader.get());
-        m_shader->setUniform("shadowStrength", own ? m_shadow : 0.0f);
-        m_shader->setUniform("texSizePx", QVector2D(e.width(), e.height()));
-        m_shader->setUniform("contentPx", QVector4D(f.x() - e.x(), f.y() - e.y(), f.width(), f.height()));
-        m_shader->setUniform("contentRadius", m_cornerRadius);
+        m_shader->setUniform(m_loc.shadowStrength, own ? m_shadow : 0.0f);
+        m_shader->setUniform(m_loc.texSizePx, QVector2D(e.width(), e.height()));
+        m_shader->setUniform(m_loc.contentPx, QVector4D(f.x() - e.x(), f.y() - e.y(), f.width(), f.height()));
+        m_shader->setUniform(m_loc.contentRadius, m_cornerRadius);
     }
     OffscreenEffect::drawWindow(renderTarget, viewport, w, mask, deviceRegion, data);
 }

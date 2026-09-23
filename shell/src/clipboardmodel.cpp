@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFutureWatcher>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -10,6 +11,7 @@
 #include <QMimeData>
 #include <QStandardPaths>
 #include <QUrl>
+#include <QtConcurrent>
 
 QString ClipboardModel::dir() { return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + QStringLiteral("/sirca-shell/clipboard"); }
 
@@ -35,7 +37,9 @@ QHash<int, QByteArray> ClipboardModel::roleNames() const
 QVariant ClipboardModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_rows.size()) return {};
-    const Entry &e = m_entries.at(m_rows.at(index.row()));
+    const int i = m_index.value(m_rows.at(index.row()), -1);
+    if (i < 0) return {};
+    const Entry &e = m_entries.at(i);
     switch (role) {
     case KindRole: return e.kind;
     case TextRole: return e.text;
@@ -58,25 +62,37 @@ void ClipboardModel::onClipboardChanged()
     if (m_settingOurselves) { m_settingOurselves = false; return; }              // that was select() / restore: already in the list
     if (m->data(QStringLiteral("x-kde-passwordManagerHint")) == "secret") return; // password managers ask not to be remembered
 
+    // every format is read ONCE: each data() on the Wayland clipboard is a pipe round trip to the owning app
     Entry e; e.time = QDateTime::currentDateTime();
-    if (m->hasUrls() && !m->urls().isEmpty() && m->urls().first().isLocalFile()) {
+    const QList<QUrl> urls = m->hasUrls() ? m->urls() : QList<QUrl>();
+    if (!urls.isEmpty() && urls.first().isLocalFile()) {
         e.kind = QStringLiteral("files");
-        QStringList l; for (const QUrl &u : m->urls()) l << u.toString();
+        QStringList l; for (const QUrl &u : urls) l << u.toString();
         e.text = l.join(QLatin1Char('\n'));
-        e.note = m->urls().size() == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(m->urls().size());
-    } else if (m->hasText() && !m->text().trimmed().isEmpty()) {
+        e.note = urls.size() == 1 ? QStringLiteral("1 file") : QStringLiteral("%1 files").arg(urls.size());
+    } else if (m->hasText()) {
         e.kind = QStringLiteral("text");
         e.text = m->text();
+        if (e.text.trimmed().isEmpty()) return;
         if (e.text.size() > 200000) return;                                        // not a clipboard entry, a file
         e.note = e.text.size() > 400 ? QStringLiteral("%1 characters").arg(e.text.size()) : QString();
     } else if (m->hasImage()) {
+        // the pixels are fetched here (one read); hashing and the PNG encode of a screen-sized picture run off the GUI
+        // thread, and the entry is pushed when they are done
         const QImage img = qvariant_cast<QImage>(m->imageData());
         if (img.isNull() || qint64(img.width()) * img.height() > 40000000) return;
-        const QByteArray id = QCryptographicHash::hash(QByteArray::fromRawData(reinterpret_cast<const char *>(img.constBits()), int(qMin<qsizetype>(img.sizeInBytes(), 4000000))), QCryptographicHash::Sha1).toHex().left(16);
-        e.kind = QStringLiteral("image");
-        e.imagePath = dir() + QLatin1Char('/') + QString::fromLatin1(id) + QStringLiteral(".png");
-        if (!QFile::exists(e.imagePath)) img.save(e.imagePath, "PNG");
-        e.note = QStringLiteral("%1 × %2").arg(img.width()).arg(img.height());
+        auto *w = new QFutureWatcher<Entry>(this);
+        connect(w, &QFutureWatcher<Entry>::finished, this, [this, w] { w->deleteLater(); const Entry e = w->result(); if (!e.kind.isEmpty()) push(e); });
+        const QDateTime time = e.time;
+        w->setFuture(QtConcurrent::run([img, time] {
+            Entry e; e.time = time;
+            const QByteArray id = QCryptographicHash::hash(QByteArray::fromRawData(reinterpret_cast<const char *>(img.constBits()), int(qMin<qsizetype>(img.sizeInBytes(), 4000000))), QCryptographicHash::Sha1).toHex().left(16);
+            e.kind = QStringLiteral("image");
+            e.imagePath = dir() + QLatin1Char('/') + QString::fromLatin1(id) + QStringLiteral(".png");
+            if (!QFile::exists(e.imagePath) && !img.save(e.imagePath, "PNG")) e.kind.clear();
+            e.note = QStringLiteral("%1 × %2").arg(img.width()).arg(img.height());
+            return e; }));
+        return;
     } else return;
     push(e);
 }
@@ -84,8 +100,9 @@ void ClipboardModel::onClipboardChanged()
 void ClipboardModel::push(const Entry &in)
 {
     Entry e = in;
-    for (int i = 0; i < m_entries.size(); ++i)                                     // the same thing again moves to the top (and stays pinned)
-        if (m_entries.at(i).kind == e.kind && m_entries.at(i).text == e.text && m_entries.at(i).imagePath == e.imagePath) { e.pinned = e.pinned || m_entries.at(i).pinned; m_entries.removeAt(i); break; }
+    if (!e.id) e.id = ++m_lastId;
+    for (int i = 0; i < m_entries.size(); ++i)                                     // the same thing again moves to the top (and stays pinned, and keeps its row: a move, not remove + insert)
+        if (m_entries.at(i).kind == e.kind && m_entries.at(i).text == e.text && m_entries.at(i).imagePath == e.imagePath) { e.pinned = e.pinned || m_entries.at(i).pinned; e.id = m_entries.at(i).id; m_entries.removeAt(i); break; }
     m_entries.prepend(e);
     // only what is NOT pinned counts towards the limit, and only that is ever pushed out
     auto loose = [this] { int n = 0; for (const Entry &x : std::as_const(m_entries)) if (!x.pinned) ++n; return n; };
@@ -96,6 +113,7 @@ void ClipboardModel::push(const Entry &in)
         if (!old.imagePath.isEmpty()) { bool used = false; for (const Entry &x : std::as_const(m_entries)) if (x.imagePath == old.imagePath) used = true; if (!used) QFile::remove(old.imagePath); }
     }
     refilter();
+    changed(e.id);                                                                  // a repeated copy keeps its row but has a new time
     m_saveLater.start();
 }
 
@@ -121,7 +139,7 @@ void ClipboardModel::restoreIfEmpty()
 void ClipboardModel::select(int row)
 {
     if (row < 0 || row >= m_rows.size()) return;
-    const Entry e = m_entries.at(m_rows.at(row));
+    const Entry e = m_entries.at(m_index.value(m_rows.at(row)));
     auto *c = KSystemClipboard::instance();
     if (!c) return;
     m_settingOurselves = true;
@@ -133,7 +151,7 @@ void ClipboardModel::select(int row)
 void ClipboardModel::remove(int row)
 {
     if (row < 0 || row >= m_rows.size()) return;
-    const Entry e = m_entries.takeAt(m_rows.at(row));
+    const Entry e = m_entries.takeAt(m_index.value(m_rows.at(row)));
     if (!e.imagePath.isEmpty()) { bool used = false; for (const Entry &x : std::as_const(m_entries)) if (x.imagePath == e.imagePath) used = true; if (!used) QFile::remove(e.imagePath); }
     refilter(); m_saveLater.start();
 }
@@ -148,23 +166,43 @@ void ClipboardModel::clear()
 void ClipboardModel::togglePin(int row)
 {
     if (row < 0 || row >= m_rows.size()) return;
-    Entry &e = m_entries[m_rows.at(row)];
+    Entry &e = m_entries[m_index.value(m_rows.at(row))];
     e.pinned = !e.pinned;
-    refilter(); m_saveLater.start();
+    const quint64 id = e.id;
+    refilter(); changed(id); m_saveLater.start();
 }
 
 void ClipboardModel::setFilter(const QString &f) { if (f == m_filter) return; m_filter = f; Q_EMIT filterChanged(); refilter(); }
 
+// The rows are the entries' ids, pinned first, each group newest first, through the filter. The list is brought to the
+// new order with row removes, inserts and moves (not a model reset, which rebuilt every delegate and lost the list's
+// position on every copy): removals first, then each position in turn is either already right, filled by a move from
+// further down, or a new insert.
 void ClipboardModel::refilter()
 {
-    beginResetModel();
-    m_rows.clear();
+    m_index.clear();
+    for (int i = 0; i < m_entries.size(); ++i) m_index.insert(m_entries.at(i).id, i);
+    QList<quint64> want;
     const QString needle = m_filter.trimmed().toLower();
-    for (int pass = 0; pass < 2; ++pass)                                           // pinned first, each group newest first
-        for (int i = 0; i < m_entries.size(); ++i)
-            if (m_entries.at(i).pinned == (pass == 0) && (needle.isEmpty() || m_entries.at(i).text.toLower().contains(needle))) m_rows << i;
-    endResetModel();
-    Q_EMIT countChanged();
+    for (int pass = 0; pass < 2; ++pass)
+        for (const Entry &e : std::as_const(m_entries))
+            if (e.pinned == (pass == 0) && (needle.isEmpty() || e.text.toLower().contains(needle))) want << e.id;
+    const int before = m_rows.size();
+    for (int i = m_rows.size() - 1; i >= 0; --i)
+        if (!want.contains(m_rows.at(i))) { beginRemoveRows({}, i, i); m_rows.removeAt(i); endRemoveRows(); }
+    for (int j = 0; j < want.size(); ++j) {
+        if (j < m_rows.size() && m_rows.at(j) == want.at(j)) continue;
+        const int k = m_rows.indexOf(want.at(j), j + 1);
+        if (k < 0) { beginInsertRows({}, j, j); m_rows.insert(j, want.at(j)); endInsertRows(); }
+        else { beginMoveRows({}, k, k, {}, j); m_rows.move(k, j); endMoveRows(); }
+    }
+    if (m_rows.size() != before) Q_EMIT countChanged();
+}
+
+void ClipboardModel::changed(quint64 id)
+{
+    const int row = m_rows.indexOf(id);
+    if (row >= 0) Q_EMIT dataChanged(index(row), index(row));
 }
 
 void ClipboardModel::load()
@@ -177,6 +215,7 @@ void ClipboardModel::load()
         Entry e{o.value(QStringLiteral("kind")).toString(), o.value(QStringLiteral("text")).toString(), o.value(QStringLiteral("image")).toString(),
                 QDateTime::fromString(o.value(QStringLiteral("time")).toString(), Qt::ISODate), o.value(QStringLiteral("note")).toString(), o.value(QStringLiteral("pinned")).toBool()};
         if (e.kind == QLatin1String("image") && !QFile::exists(e.imagePath)) continue;
+        e.id = ++m_lastId;
         if (!e.kind.isEmpty()) m_entries << e;
     }
 }

@@ -77,9 +77,10 @@ if shutil.which("kwriteconfig6"):
     # accent-filled control (the play button) is accent mixed with the surface, and is un-mixed like text is.
     for k, v in vals.items(): subprocess.run(["kwriteconfig6", "--file", "kwinrc", "--group", "Effect-glasskey", "--key", k, str(v)], check=False)
     # the plugin's id is its file name, and a rebuilt plugin is installed under a new one (glasskey1, glasskey2, ...)
-    loaded = subprocess.run(["qdbus6", "org.kde.KWin", "/Effects", "org.kde.kwin.Effects.loadedEffects"], check=False, capture_output=True, text=True).stdout.split()
+    QDBUS = shutil.which("qdbus6") or shutil.which("qdbus-qt6")           # Fedora names it qdbus-qt6; without either, skip the live reconfigure
+    loaded = subprocess.run([QDBUS, "org.kde.KWin", "/Effects", "org.kde.kwin.Effects.loadedEffects"], check=False, capture_output=True, text=True).stdout.split() if QDBUS else []
     for name in [n for n in loaded if n.startswith("glasskey")]:
-        subprocess.run(["qdbus6", "org.kde.KWin", "/Effects", "org.kde.kwin.Effects.reconfigureEffect", name], check=False, capture_output=True)
+        subprocess.run([QDBUS, "org.kde.KWin", "/Effects", "org.kde.kwin.Effects.reconfigureEffect", name], check=False, capture_output=True)
 if "--apply" in sys.argv and shutil.which("spicetify"):
     subprocess.run(["spicetify", "-q", "config", "current_theme", "Glass", "color_scheme", "glass-" + mode], check=False)
     subprocess.run(["spicetify", "-q", "refresh", "-s"], check=False, timeout=30)

@@ -6,8 +6,15 @@ QtObject {
     id: main
     // ---- one set (wallpaper + bar + dock) per screen; main.topBar / main.dock are the PRIMARY screen's, which the rest of
     // the shell (shortcuts, D-Bus, popups) talks to. See ScreenSet.qml.
-    // (Qt.application.screens is a plain list: an Instantiator gives its delegates an index only, so the screen is looked up)
-    property var sets: Instantiator { model: Qt.application.screens.length; delegate: ScreenSet { required property int index; screen: Qt.application.screens[index]; host: main }
+    // The sets are keyed by output NAME, one row each in a list model that is edited in place: unplugging a middle screen
+    // removes that screen's row and so that set only. (A count model gave the delegates an index: removing the middle
+    // screen destroyed the LAST set and re-pointed the others at the wrong QScreen.) The set finds its QScreen by name.
+    property var screenList: ListModel { id: screenList }
+    function rescanScreens() { const have = Qt.application.screens.map(s => s.name)
+        for (let i = screenList.count - 1; i >= 0; --i) if (have.indexOf(screenList.get(i).screenName) < 0) screenList.remove(i)
+        for (const n of have) { let seen = false; for (let i = 0; i < screenList.count; ++i) if (screenList.get(i).screenName === n) { seen = true; break } if (!seen) screenList.append({ screenName: n }) } }
+    property var _scr: Connections { target: Qt.application; function onScreensChanged() { main.rescanScreens() } }
+    property var sets: Instantiator { model: screenList; delegate: ScreenSet { required screenName; host: main }
         onObjectAdded: (i, o) => main.rescan(); onObjectRemoved: (i, o) => main.rescan() }
     property var primarySet: null
     function rescan() { let p = null; for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.primary) { p = o; break } } if (!p && sets.count) p = sets.objectAt(0); primarySet = p }
@@ -17,17 +24,21 @@ QtObject {
     // what every bar and dock reads (the task model is global; the flags used to live on the one dock)
     readonly property bool fullscreenActive: dock ? dock.fullscreenActive : false
     readonly property bool gameActive: dock ? dock.gameActive : false
-    property bool launcherOpen: dock ? dock.launcherOpen : false
-    onLauncherOpenChanged: if (dock && dock.launcherOpen !== launcherOpen) dock.launcherOpen = launcherOpen
+    readonly property bool launcherOpen: dock ? dock.launcherOpen : false        // read-only: close through closeLauncher()
     function closeLobes() { for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.bar) o.bar.openLobe = "" } }
+    function closeLauncher() { for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.dock) o.dock.launcherOpen = false } }
     // the menu window is moved to another screen only when it has to be: re-assigning Window.screen on a mapped layer
     // surface left the menu unable to show at all (2026-09-22)
     function openDesktopMenu(screen, x, y) { const m = win("desktopMenu"); if (screen && !m.visible && m.screen !== screen && (!m.screen || m.screen.name !== screen.name)) { m.close_(); m.screen = screen; m.setupDone = false } m.openAt(x, y) }
 
     // ---- update check: opt-in ("updateCheck": true, asked by the installer, switch in Sirca Settings > Behaviour). Once
-    // after start-up (2 min in), then every 6 h; the check itself is one small GET to GitHub, see Shell::checkForUpdate.
+    // after start-up (2 min in), then once a day; the check itself is one small GET to GitHub, see Shell::checkForUpdate.
     property var _upd: Timer { interval: 120000; running: Config.get("updateCheck", false) === true; repeat: true; triggeredOnStart: false
-        onTriggered: { Shell.checkForUpdate(false); interval = 6 * 3600 * 1000 } }
+        onTriggered: { Shell.checkForUpdate(false); interval = 24 * 3600 * 1000 } }
+    // ---- follow the sun: the one acting instance (quick settings shows a display-only copy); does nothing unless autoMode == "sun"
+    property var autoMode: QSAutoMode { driver: true }
+    // ---- snap zones while a window is dragged (config snapZones); the window builds hidden and loads/unloads its KWin script itself
+    property var _snap: SnapZones {}
     // ---- Alt+Tab
     // the clipboard manager lives for the whole session (it keeps the clipboard alive), the panel only shows it
     property var clipboard: ClipboardModel {}
@@ -35,7 +46,7 @@ QtObject {
     // large windows' worth of QML in the start-up path). warm builds them one by one once the shell has settled, so the
     // first Alt+Tab or Meta+Space does not pay for it either.
     property var _made: ({})
-    readonly property var _lazy: ({ clipboardPanel: _cClipboardPanel, powerMenu: _cPowerMenu, welcome: _cWelcome, capture: _cCapture, settings: _cSettings, switcher: _cSwitcher, search: _cSearch, tiles: _cTiles, editScene: _cEdit, desktopMenu: _cDesktopMenu })
+    readonly property var _lazy: ({ clipboardPanel: _cClipboardPanel, powerMenu: _cPowerMenu, welcome: _cWelcome, capture: _cCapture, settings: _cSettings, switcher: _cSwitcher, search: _cSearch, tiles: _cTiles, editScene: _cEdit, desktopMenu: _cDesktopMenu, cheatSheet: _cCheatSheet })
     function win(name) { let w = _made[name]; if (!w) { const t = Date.now(); w = _lazy[name].createObject(main); _made[name] = w; if (!w) console.warn("could not build", name, _lazy[name].errorString()); else console.log("start-up: built", name, "in", Date.now() - t, "ms") } return w }
     function closePopups() { main.closeLobes(); for (let i = 0; i < sets.count; ++i) { const o = sets.objectAt(i); if (o && o.dock) { o.dock.launcherOpen = false; o.dock.previewShown = false } } }
     // (closePopups must NOT close the desktop menu: the menu calls it from its own opened(), so it closed itself the moment
@@ -77,15 +88,18 @@ QtObject {
     // scripted screenshot without the overlay: grab a frame, cut the rectangle out of it
     property rect _grabRect
     property bool _grabPending: false
-    property var _gr: Connections { target: Shell; function onGrabRegionRequested(x, y, w, h) { main._grabRect = Qt.rect(x, y, w, h); main._grabPending = true; Screenshot.grab(Qt.application.screens[0].name) } }
+    // the rectangle is in desktop coordinates: the screen under its origin is captured and the cut is made screen-local
+    function screenAt(x, y) { for (const s of Qt.application.screens) if (x >= s.virtualX && x < s.virtualX + s.width && y >= s.virtualY && y < s.virtualY + s.height) return s; return Qt.application.screens[0] }
+    property var _grabScreen: null
+    property var _gr: Connections { target: Shell; function onGrabRegionRequested(x, y, w, h) { const s = main.screenAt(x, y); if (!s) return; main._grabScreen = s; main._grabRect = Qt.rect(x - s.virtualX, y - s.virtualY, w, h); main._grabPending = true; Screenshot.grab(s.name) } }
     property var _gr2: Connections { target: Screenshot; function onFrameChanged() { if (!main._grabPending || !Screenshot.ready) return; main._grabPending = false
-        const r = main._grabRect; const p = Screenshot.finish(r.x, r.y, r.width, r.height, Qt.application.screens[0].width, true, true); Screenshot.drop(); console.log("grabRegion ->", p) } }
+        const r = main._grabRect, s = main._grabScreen; const p = Screenshot.finish(r.x, r.y, r.width, r.height, s ? s.width : Qt.application.screens[0].width, true, true); Screenshot.drop(); console.log("grabRegion ->", p) } }
     // the lock screen wears the desktop's look: when the wallpaper, mode or accent changes, its state file is rewritten
     // (glass-lock-sync comes with Glass Desktop's lock screen; without it this does nothing)
     readonly property string lockLook: Config.get("wallpaper", "") + "|" + Config.get("mode", "dark") + "|" + Config.get("accent", "")
     onLockLookChanged: lockSync.restart()
     property var _lockSync: Timer { id: lockSync; interval: 900; onTriggered: if (Shell.hasProgram("glass-lock-sync")) Shell.runDetached("glass-lock-sync", []) }
-    property var _themeLater: Timer { id: themeLater; interval: 350; onTriggered: { const q = main.topBar.nativeControl; if (q && q.paletteOpen !== undefined) q.paletteOpen = true } }
+    property var _themeLater: Timer { id: themeLater; interval: 350; onTriggered: { const q = main.topBar ? main.topBar.nativeControl : null; if (q && q.paletteOpen !== undefined) q.paletteOpen = true } }
     // ---- edit mode (right click on the bar or the dock, or D-Bus toggleEditMode)
     property bool editing: false
     function setEditing(on) { if (on === editing) return; if (on) closePopups(); editing = on; const s = win("editScene"); if (on) s.open(); else s.close_() }
@@ -95,29 +109,34 @@ QtObject {
         dockHole: main.dock ? Qt.rect(main.dock.x + main.dock.barRect.x - 12, main.dock.y + main.dock.barRect.y - 12, main.dock.barRect.width + 24, main.dock.barRect.height + 24) : Qt.rect(0, 0, 0, 0)
         onDone: main.setEditing(false); onMoreSettings: { main.setEditing(false); main.win("settings").openIt() } } }
     property var _cTiles: Component { Tiles { onOpened: main.closePopups() } }
+    property var _cCheatSheet: Component { CheatSheet { onOpened: main.closePopups() } }
     property var _cSearch: Component { Search { onOpened: main.closePopups() } }
-    property var _sw: Connections { target: Shell; function onSwitcherRequested(reverse) { main.topBar.openLobe = ""; main.dock.launcherOpen = false; main.win("switcher").step(reverse) } }
+    property var _sw: Connections { target: Shell; function onSwitcherRequested(reverse) { main.closeLobes(); main.closeLauncher(); main.win("switcher").step(reverse) } }
 
     // ---- the shell's own global shortcuts (window operations are already done in C++; these are the shell-side ones)
     property var _keys: Connections { target: Shell
-        function onLobeToggleRequested(name) { if (name === "media") { if (!main.topBar.mediaAvailable) return; if (main.topBar.openLobe !== "media") main.topBar.placeMedia() } main.topBar.toggle(name) }
-        function onTrayMenuRequested(i) { main.topBar.openTrayMenuAt(i) }
+        // (main.topBar / main.dock are null until the primary set has built them, and while the primary screen is away)
+        function onLobeToggleRequested(name) { const b = main.topBar; if (!b) return; if (name === "media") { if (!b.mediaAvailable) return; if (b.openLobe !== "media") b.placeMedia() } b.toggle(name) }
+        function onTrayMenuRequested(i) { if (main.topBar) main.topBar.openTrayMenuAt(i) }
         function onSettingsRequested() { main.win("settings").openIt() }
+        function onSettingsPageRequested(page) { main.win("settings").openIt(page) }
         function onSearchPreviewRequested(q) { main.win("search").preview(q) }
         function onShortcutActivated(id) {
             if (id === "search") { main.win("search").toggle(); return }
             if (id === "record") { main.recorder.toggleOrAsk(() => { const c = main.win("capture"); c.dryRun = false; c.mode = "record"; c.begin(main.windowRects(), "") }); return }
             if (id === "screenshot" || id === "screenshot-2") { main.win("capture").mode = "shot"; main.win("capture").dryRun = false; main.win("capture").begin(main.windowRects(), ""); return }
             if (id === "screenshot-preview") { main.win("capture").dryRun = true; main.win("capture").begin(main.windowRects(), Config.wallpaper !== "" ? Config.wallpaper : Shell.plasmaWallpaper()); return }
-            if (id === "theme-picker") { main.topBar.openLobe = "gear"; themeLater.restart(); return }
+            if (id === "theme-picker") { if (main.topBar) { main.topBar.openLobe = "gear"; themeLater.restart() } return }
             if (id === "edit") { main.setEditing(!main.editing); return }
             if (id === "tiles" || id === "tiles-preview") { const t = main.win("tiles"); t.dryRun = id === "tiles-preview"; t.toggle(); return }
             if (id === "clipboard") { main.win("clipboardPanel").toggle(); return }
+            if (id === "cheatsheet") { main.win("cheatSheet").toggle(); return }
+            if (id === "notif-clear") { if (main.topBar && main.topBar.notifications) main.topBar.notifications.clearAll(); return }
             if (id === "welcome") { main.win("welcome").open(); return }
             if (id === "power") { main.win("powerMenu").dryRun = false; main.win("powerMenu").toggle(); return }
             if (id === "power-preview") { main.win("powerMenu").dryRun = true; main.win("powerMenu").toggle(); return }
             if (id === "show-desktop") main.toggleShowDesktop();
-            else if (id.startsWith("dock-")) { const n = parseInt(id.substring(5)) - 1; if (main.dock.tasksModel && n < main.dock.tasksModel.count) main.dock.activateCell(n); }
+            else if (id.startsWith("dock-")) { const n = parseInt(id.substring(5)) - 1; const d = main.dock; if (d && d.tasksModel && n < d.tasksModel.count) d.activateCell(n); }
         } }
 
     // ---- click outside closes whatever is open
@@ -125,8 +144,8 @@ QtObject {
     // (no click catcher any more: popups close on focus loss, see Surface.popupFocus. Catcher.qml is unused.)
     // a press on one of our surfaces closes the OTHER surface's popups (that one keeps the keyboard focus, because the
     // pressed surface does not take it, so focus loss alone would not notice)
-    property var _cross: Connections { target: main.dock; function onPressedAnywhere() { if (main.topBar.openLobe !== "") main.topBar.openLobe = "" } }
-    property var _cross2: Connections { target: main.topBar; function onPressedAnywhere() { if (main.dock.launcherOpen) main.dock.launcherOpen = false; if (main.dock.previewShown && main.dock.lobeMode === "menu") main.dock.previewShown = false } }
+    property var _cross: Connections { target: main.dock; function onPressedAnywhere() { if (main.topBar && main.topBar.openLobe !== "") main.topBar.openLobe = "" } }
+    property var _cross2: Connections { target: main.topBar; function onPressedAnywhere() { const d = main.dock; if (!d) return; if (d.launcherOpen) d.launcherOpen = false; if (d.previewShown && d.lobeMode === "menu") d.previewShown = false } }
 
     // ---- window watcher for dodging: every visible window on this desktop, ungrouped, with its geometry
     property int rev: 0
@@ -154,6 +173,7 @@ QtObject {
     property var _sd: Connections { target: Shell
         function onDbusSignal(iface, member, args) { if (iface === "org.kde.KWin" && member === "showingDesktopChanged") { if (main.dbg) console.log("showingDesktopChanged", args[0]); if (!!args[0]) main.showingDesktop = true; else if (main._hiddenByUs.length === 0) main.showingDesktop = false } } }
     Component.onCompleted: {
+        rescanScreens();
         Shell.dbusListen("org.kde.KWin", "/KWin", "org.kde.KWin", "showingDesktopChanged");
         main.showingDesktop = !!Shell.dbusCall("org.kde.KWin", "/KWin", "org.freedesktop.DBus.Properties", "Get", ["org.kde.KWin", "showingDesktop"]);
     }
@@ -193,7 +213,9 @@ QtObject {
         if (!a) { activeTitle = ""; activeApp = ""; activeIcon = undefined; return; }
         activeTitle = m.data(a, 0) || ""; activeApp = m.data(a, R_.AppName) || ""; activeIcon = m.data(a, 1);
     }
-    property var _slow: Timer { interval: 2500; running: true; repeat: true; onTriggered: main.refreshActive() }   // titles change without a model signal we can rely on
+    // a safety net only: the model's dataChanged / activeTaskChanged drive refreshActive, this catches a title that changed
+    // without a signal we can rely on. Every 2.5 s it re-read the whole model at 240 Hz-rendering idle; 30 s is plenty for that.
+    property var _slow: Timer { interval: 30000; running: true; repeat: true; onTriggered: main.refreshActive() }
     onShowingDesktopChanged: refreshActive()
     function overlaps(r) {
         const m = windows; if (!m) return false;

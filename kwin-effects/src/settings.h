@@ -42,6 +42,8 @@ struct GeneralSettings
     bool excludeTooltips;
     bool excludeMenus;
     bool excludeOSD;
+    int qualityTier;        // 0 full, 1 reduced, 2 minimal (see BlurEffect::applySettings)
+    bool reduceOnBattery;
 };
 
 struct ForceBlurSettings

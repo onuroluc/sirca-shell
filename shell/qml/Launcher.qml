@@ -6,6 +6,7 @@ import QtQuick.Effects
 import org.kde.kirigami as Kirigami
 import SircaShell
 import "Glass"
+import "control" as Control
 
 Item {
     id: root
@@ -112,15 +113,18 @@ Item {
     // ---- footer ----
     Rectangle { x: 14; y: footer.y - 1; width: parent.width - 28; height: 1; color: Config.fg(0.08) }
     Item { id: footer; x: 14; y: parent.height - 52; width: parent.width - 28; height: 52
-        readonly property string user: Shell.homePath().split("/").pop()
+        // the account's real name and face (KUser through control/UserInfo, as quick settings does), not the home folder's name
+        // and a guessed AccountsService path
+        Control.UserInfo { id: user }
+        readonly property string userName: String(user.name).replace(/^\S+\s+/, "")
         Row { anchors.verticalCenter: parent.verticalCenter; spacing: 10
             Item { width: 32; height: 32
                 Rectangle { anchors.fill: parent; radius: 16; color: Config.fg(0.08); border.width: 1; border.color: Config.fg(0.18) }
                 Kirigami.Icon { anchors.centerIn: parent; width: 18; height: 18; source: "user-symbolic"; isMask: true; color: Config.fgSolid; opacity: 0.8; roundToIconSize: false; visible: face.status !== Image.Ready }
                 Rectangle { id: faceMask; anchors.fill: parent; anchors.margins: 2; radius: width / 2; visible: false; layer.enabled: true; layer.smooth: true }
-                Image { id: face; anchors.fill: faceMask; source: "file:///var/lib/AccountsService/icons/" + footer.user; sourceSize: Qt.size(96, 96); fillMode: Image.PreserveAspectCrop; visible: false; layer.enabled: true; mipmap: true }
+                Image { id: face; anchors.fill: faceMask; source: user.urlAvatar; sourceSize: Qt.size(96, 96); fillMode: Image.PreserveAspectCrop; visible: false; layer.enabled: true; mipmap: true }
                 MultiEffect { anchors.fill: faceMask; source: face; maskEnabled: true; maskSource: faceMask; maskThresholdMin: 0.5; maskSpreadAtMin: 1.0; visible: face.status === Image.Ready } }
-            Text { anchors.verticalCenter: parent.verticalCenter; text: footer.user.charAt(0).toUpperCase() + footer.user.slice(1); color: Config.ink; font.pixelSize: 14; font.weight: Font.Medium } }
+            Text { anchors.verticalCenter: parent.verticalCenter; text: footer.userName; color: Config.ink; font.pixelSize: 14; font.weight: Font.Medium } }
         Row { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; spacing: 8
             FootBtn { icon: "configure"; tip: "Sirca Settings"; onTapped: { Shell.dbusSend("onur.SircaShell", "/SircaShell", "onur.SircaShell", "openSettings"); root.done() } }
             FootBtn { icon: "system-lock-screen-symbolic"; tip: "Lock"; onTapped: { Shell.dbusSend("org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver", "Lock"); root.done() } }

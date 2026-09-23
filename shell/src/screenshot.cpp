@@ -122,8 +122,11 @@ QString Screenshot::finish(qreal x, qreal y, qreal w, qreal h, qreal overlayWidt
     QString path;
     if (save) {
         QDir().mkpath(folder());
-        path = folder() + QStringLiteral("/Screenshot_") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")) + QStringLiteral(".png");
-        for (int n = 2; QFile::exists(path); ++n) path = path.left(path.lastIndexOf(QLatin1Char('.'))).section(QLatin1Char('-'), 0, 0) + QStringLiteral("-%1.png").arg(n);
+        const QString base = folder() + QStringLiteral("/Screenshot_") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+        path = base + QStringLiteral(".png");
+        // a second shot in the same second gets "-2", "-3", ...; the suffix goes on the file name only (cutting the whole
+        // path at its first '-' mangled a folder name with a dash in it)
+        for (int n = 2; QFile::exists(path); ++n) path = base + QStringLiteral("-%1.png").arg(n);
         if (!out.save(path, "PNG")) path.clear();
     }
     if (clipboard) if (auto *c = KSystemClipboard::instance()) { auto *mime = new QMimeData; mime->setImageData(out); c->setMimeData(mime, QClipboard::Clipboard); }

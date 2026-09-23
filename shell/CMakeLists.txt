@@ -22,11 +22,16 @@ find_package(KF6 REQUIRED COMPONENTS Package Config I18n GlobalAccel Service Gui
 find_package(Plasma REQUIRED)
 find_package(PlasmaQuick REQUIRED)
 find_package(KWayland REQUIRED)          # fake input: pass the click that dismissed a popup on to the window under it
+# optional: camera / screen-share indicators watch PipeWire's registry (src/privacymonitor.cpp); without it they stay off
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(PipeWire IMPORTED_TARGET libpipewire-0.3)
+endif()
 
 qt_standard_project_setup(REQUIRES 6.6)
 
 set_source_files_properties(qml/Config.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
-qt_add_executable(sirca-shell src/main.cpp src/shell.cpp src/shell.h src/shellcorona.cpp src/shellcorona.h src/applethost.cpp src/applethost.h src/appsmodel.cpp src/appsmodel.h src/trayhost.cpp src/trayhost.h src/osdservice.cpp src/osdservice.h src/clipboardmodel.cpp src/clipboardmodel.h src/screenshot.cpp src/screenshot.h src/recorderprocess.cpp src/recorderprocess.h)
+qt_add_executable(sirca-shell src/main.cpp src/shell.cpp src/shell.h src/shellcorona.cpp src/shellcorona.h src/applethost.cpp src/applethost.h src/appsmodel.cpp src/appsmodel.h src/trayhost.cpp src/trayhost.h src/osdservice.cpp src/osdservice.h src/clipboardmodel.cpp src/clipboardmodel.h src/screenshot.cpp src/screenshot.h src/recorderprocess.cpp src/recorderprocess.h src/powerinfo.cpp src/powerinfo.h src/keyboardinfo.cpp src/keyboardinfo.h src/privacymonitor.cpp src/privacymonitor.h src/calendarmodel.cpp src/calendarmodel.h src/weather.cpp src/weather.h src/removable.cpp src/removable.h src/lyrics.cpp src/lyrics.h src/spectrum.cpp src/spectrum.h src/shortcutsmodel.cpp src/shortcutsmodel.h src/emojimodel.cpp src/emojimodel.h src/sysmon.cpp src/sysmon.h src/palette.cpp src/palette.h src/userwidgets.cpp src/userwidgets.h src/kwinsnap.cpp src/kwinsnap.h)
 qt_add_qml_module(sirca-shell
     URI SircaShell
     VERSION 1.0
@@ -38,13 +43,30 @@ qt_add_qml_module(sirca-shell
         qml/TopBar.qml
         qml/Dock.qml
         qml/MediaIsland.qml
+        qml/MediaSource.qml
+        qml/LevelMeter.qml
         qml/MediaPanel.qml
+        qml/DockAudio.qml
+        qml/NetworkBackend.qml
+        qml/BluetoothBackend.qml
+        qml/BrightnessBackend.qml
+        qml/VolumeBackend.qml
+        qml/BarBattery.qml
+        qml/BarMic.qml
+        qml/BarPrivacy.qml
+        qml/BarKeyboard.qml
+        qml/QSCaffeine.qml
+        qml/QSAutoMode.qml
         qml/Search.qml
+        qml/SearchResults.qml
         qml/Launcher.qml
         qml/QuickSettings.qml
         qml/Tray.qml
         qml/TrayMenu.qml
         qml/CalendarPanel.qml
+        qml/WeatherWidget.qml
+        qml/RemovableMedia.qml
+        qml/MediaSpectrum.qml
         qml/Wallpaper.qml
         qml/PowerMenu.qml
         qml/Welcome.qml
@@ -71,9 +93,15 @@ qt_add_qml_module(sirca-shell
         qml/Glass/IconHaze.qml
         qml/WindowPreview.qml
         qml/Switcher.qml
+        qml/UserWidget.qml
+        qml/SnapZones.qml
+        qml/CheatSheet.qml
+        qml/SysMon.qml
     # quick settings pages: plain files (they rely on the wrapper's `root` id, so they are not compiled ahead of time)
     RESOURCES
         qml/icons/palette-symbolic.svg
+        scripts/kwin-snap-zones.js
+        qml/data/emoji.json
         qml/control/Battery.qml
         qml/control/ControlPanel.qml
         qml/control/FullRepresentation.qml
@@ -94,7 +122,16 @@ qt_add_qml_module(sirca-shell
 )
 target_include_directories(sirca-shell PRIVATE src)
 target_link_libraries(sirca-shell PRIVATE Qt6::Network Qt6::Concurrent Qt6::Quick Qt6::QuickControls2 Qt6::DBus Qt6::Widgets LayerShellQt::Interface KF6::WindowSystem KF6::GlobalAccel KF6::Package KF6::ConfigCore KF6::I18n Plasma::Plasma Plasma::PlasmaQuick Plasma::KWaylandClient KF6::Service KF6::GuiAddons)
+if(PipeWire_FOUND)
+    target_link_libraries(sirca-shell PRIVATE PkgConfig::PipeWire)
+    target_compile_definitions(sirca-shell PRIVATE HAVE_PIPEWIRE)
+endif()
 install(TARGETS sirca-shell DESTINATION ${KDE_INSTALL_BINDIR})
+# glass-palette IMAGE: the accent a wallpaper asks for, from the shell's own code (checks it against glass-desktop/tools/palette.py)
+qt_add_executable(glass-palette src/palette-main.cpp src/palette.cpp src/palette.h)
+target_include_directories(glass-palette PRIVATE src)
+target_link_libraries(glass-palette PRIVATE Qt6::Gui Qt6::Qml Qt6::Concurrent)
+install(TARGETS glass-palette DESTINATION ${KDE_INSTALL_BINDIR})
 # KWin matches the desktop file by its Exec path, so it has to carry the path the binary is really installed to
 set(SIRCA_SHELL_BINDIR "${CMAKE_INSTALL_PREFIX}/${KDE_INSTALL_BINDIR}")
 if(IS_ABSOLUTE "${KDE_INSTALL_BINDIR}")
