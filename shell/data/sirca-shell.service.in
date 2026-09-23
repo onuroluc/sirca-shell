@@ -1,6 +1,7 @@
 [Unit]
 Description=Sirca Shell (liquid-glass top bar and dock for Plasma)
 # five crashes within a minute = give up and restore the Plasma panels instead of leaving the desktop without bars
+# (the fallback unit checks for exactly that: OnFailure= also fires for the failures Restart= recovers from)
 StartLimitIntervalSec=60
 StartLimitBurst=5
 OnFailure=sirca-shell-fallback.service

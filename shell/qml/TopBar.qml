@@ -149,6 +149,7 @@ Surface {
     onGearWChanged: gearX = under(gear, gearW)
     onClockWChanged: clockX = under(clockBox, clockW)
     onBarWChanged: refreshAnchors()
+    onTopYChanged: island.layoutTick++
     readonly property rect notifRect: Qt.rect(notifX, topY + barH, notifW, notifH)
     // removable disks lobe (RemovableMedia): only there while a removable drive is plugged in
     readonly property real disksW: disksPanel.implicitWidth + 2 * Config.lobePad
@@ -229,7 +230,7 @@ Surface {
         if (Qt.application.arguments.indexOf("--open-tray") >= 0) openTrayLater.start();
         if (Qt.application.arguments.indexOf("--test-showdesktop") >= 0) sdTest.start();
     }
-    onWidthChanged: pushShape()
+    onWidthChanged: { pushShape(); island.layoutTick++ }
     onHeightChanged: pushShape()
     Component.onDestruction: Shell.dbusSendTyped("org.kde.KWin", "/Glass", "org.kde.KWin.Glass", "clearLobes", "sii", ["sirca-shell", bar.width, bar.height])
 
@@ -303,7 +304,7 @@ Surface {
         readonly property real leftW: { let w = Config.barPad; for (const n of Config.barLeft.filter(live)) w += (n === "title" ? Math.min(titleRow.naturalW, Config.titleMaxWidth) : slot(n, false)) + Config.barSpacing; return w }
         readonly property real rightW: { let w = Config.barPad; for (const n of Config.barRight.filter(live)) w += (n === "title" ? Math.min(titleRow.naturalW, Config.titleMaxWidth) : slot(n, false)) + Config.barSpacing; return w }
         readonly property real centerW: { let w = 0; for (const n of Config.barCenter.filter(live)) w += (n === "title" ? Math.min(titleRow.naturalW, Config.titleMaxWidth) : slot(n, false)) + Config.barSpacing; return w }
-        onLayoutChanged: if (bar.openLobe === "") bar.refreshAnchors()
+        onLayoutChanged: { if (bar.openLobe === "") bar.refreshAnchors(); island.layoutTick++ }   // (the tick: the media island re-maps its meter slot)
         readonly property real contentOpacity: bar.editing ? 0 : 1
         // system tray: the real Plasma applet, compact, hosted in the bar zone (its popups are still Plasma dialogs for now)
         // the tray only publishes a minimum width; anything wider gets spread between its icons
@@ -392,7 +393,7 @@ Surface {
             Component.onCompleted: { Shell.dbusListen("org.kde.plasmashell", "/org/kde/osdService", "org.kde.osdService", "osdProgress"); Shell.dbusListen("org.kde.plasmashell", "/org/kde/osdService", "org.kde.osdService", "osdText") }
         }
         Rectangle { visible: gear.visible && Config.barHoverPills; x: gear.x - 9; anchors.verticalCenter: parent.verticalCenter; width: gear.width + 18; height: 27; radius: 13.5; color: Config.fg(gh.hovered && bar.openLobe !== "gear" ? 0.07 : 0); Behavior on color { ColorAnimation { duration: Config.quick } } }
-        MediaIsland { id: island; quiet: bar.quiet || (bar.hiddenFully && bar.openLobe === "");   /* slid away under a window: nothing to animate */ lobeOpen: bar.openLobe === "media"; onClicked: { if (bar.openLobe !== "media") bar.placeMedia(); bar.toggle("media") }
+        MediaIsland { id: island; quiet: bar.quiet || (bar.hiddenFully && bar.openLobe === ""); barLeft: Math.floor((bar.screenW - bar.width) / 2); slideY: bar.topY;   /* slid away under a window: nothing to animate */ lobeOpen: bar.openLobe === "media"; onClicked: { if (bar.openLobe !== "media") bar.placeMedia(); bar.toggle("media") }
             onHasTrackChanged: if (!hasTrack && bar.openLobe === "media") bar.openLobe = ""
             allowed: barContent.placed("media") && !bar.editing; x: barContent.at("media"); anchors.verticalCenter: parent.verticalCenter }
         Rectangle { visible: bell.visible && Config.barHoverPills; x: bell.x - 7; anchors.verticalCenter: parent.verticalCenter; width: bell.width + 14; height: 27; radius: 13.5; color: Config.fg(bh.hovered && bar.openLobe !== "notif" ? 0.07 : 0); Behavior on color { ColorAnimation { duration: Config.quick } } }

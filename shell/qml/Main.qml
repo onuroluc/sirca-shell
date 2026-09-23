@@ -35,6 +35,9 @@ QtObject {
     // after start-up (2 min in), then once a day; the check itself is one small GET to GitHub, see Shell::checkForUpdate.
     property var _upd: Timer { interval: 120000; running: Config.get("updateCheck", false) === true; repeat: true; triggeredOnStart: false
         onTriggered: { Shell.checkForUpdate(false); interval = 24 * 3600 * 1000 } }
+    // ---- start-up self-test (6 s in: bar, dock, shortcuts, fake input, Glass effect, notifications; a notification only
+    // when something is missing) and the crash report for a run that systemd restarted after a failure
+    property var _selfTest: Timer { interval: 6000; running: true; onTriggered: { Shell.selfTest(); Shell.crashReport() } }
     // ---- follow the sun: the one acting instance (quick settings shows a display-only copy); does nothing unless autoMode == "sun"
     property var autoMode: QSAutoMode { driver: true }
     // ---- snap zones while a window is dragged (config snapZones); the window builds hidden and loads/unloads its KWin script itself

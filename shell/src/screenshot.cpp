@@ -8,6 +8,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QMimeData>
 #include <QMutex>
@@ -120,6 +121,7 @@ QString Screenshot::finish(qreal x, qreal y, qreal w, qreal h, qreal overlayWidt
     if (cut.width() < 2 || cut.height() < 2) return {};
     const QImage out = full.copy(cut);
     QString path;
+    if (clipboard) if (auto *c = KSystemClipboard::instance()) { auto *mime = new QMimeData; mime->setImageData(out); c->setMimeData(mime, QClipboard::Clipboard); }
     if (save) {
         QDir().mkpath(folder());
         const QString base = folder() + QStringLiteral("/Screenshot_") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
@@ -127,9 +129,17 @@ QString Screenshot::finish(qreal x, qreal y, qreal w, qreal h, qreal overlayWidt
         // a second shot in the same second gets "-2", "-3", ...; the suffix goes on the file name only (cutting the whole
         // path at its first '-' mangled a folder name with a dash in it)
         for (int n = 2; QFile::exists(path); ++n) path = base + QStringLiteral("-%1.png").arg(n);
-        if (!out.save(path, "PNG")) path.clear();
+        // the PNG encode runs off the GUI thread: a 5120x1440 frame at zlib's default level took the desktop away for a
+        // second or two ("full-screen screenshots take some time", 2026-09-23). Quality 60 = a light compression level:
+        // a few times faster, files somewhat larger. saved() fires when the file is there.
+        const int w = out.width(), h = out.height();
+        auto *watcher = new QFutureWatcher<bool>(this);
+        connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher, path, w, h] { watcher->deleteLater();
+            const bool ok = watcher->result(); qInfo("sirca-shell: screenshot %s %s", ok ? "written" : "FAILED", qPrintable(path));
+            Q_EMIT saved(ok ? path : QString(), w, h); });
+        watcher->setFuture(QtConcurrent::run([out, path] { QElapsedTimer t; t.start(); const bool ok = out.save(path, "PNG", 60); qInfo("sirca-shell: png encode %dx%d in %lld ms", out.width(), out.height(), t.elapsed()); return ok; }));
+        return path;                                                  // the name it will have; the notification waits for saved()
     }
-    if (clipboard) if (auto *c = KSystemClipboard::instance()) { auto *mime = new QMimeData; mime->setImageData(out); c->setMimeData(mime, QClipboard::Clipboard); }
     Q_EMIT saved(path, out.width(), out.height());
     return path;
 }

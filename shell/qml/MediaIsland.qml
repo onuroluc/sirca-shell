@@ -13,6 +13,9 @@ Item {
     signal clicked()                // the bar opens the now-playing lobe
     property bool lobeOpen: false
     property bool quiet: false      // a fullscreen window has focus: stop the perpetual animations, nobody can see them
+    property real barLeft: 0        // the bar window's left edge on its screen (bound by TopBar): the meter overlay is placed in screen coordinates
+    property real slideY: 0         // the bar's slide (bar.topY): read so the overlay follows the bar off and back on
+    property int layoutTick: 0      // bumped by the bar whenever its layout moved (the slot's position is re-mapped then)
     // The MPRIS side lives in MediaSource.qml and the level meter in LevelMeter.qml, each behind a Loader by URL: both use
     // PRIVATE Plasma modules (org.kde.plasma.private.mpris / .volume). Should one be missing or changed, only that file
     // fails to load: no now-playing element, or flat meter bars, instead of no bar at all.
@@ -98,17 +101,30 @@ Item {
         Loader { id: spectrumLoader; active: row.spectrum && Config.levelMeter; visible: active && island.playing; anchors.verticalCenter: parent.verticalCenter; source: "MediaSpectrum.qml"
             onLoaded: item.live = Qt.binding(() => levels.live)
             onStatusChanged: if (status === Loader.Error) console.warn("bar: spectrum unavailable") }
-        Row { id: levels; spacing: 2.5; anchors.verticalCenter: parent.verticalCenter; height: 14; visible: island.playing && !row.spectrum
+        // (explicit width: with the bars drawn elsewhere the Row would be 0 wide, and a positioner skips a 0-wide item)
+        Row { id: levels; spacing: 2.5; anchors.verticalCenter: parent.verticalCenter; width: overlay ? 16 : implicitWidth; height: 14; visible: island.playing && !row.spectrum
             readonly property bool live: island.playing && island.visible && !island.quiet && Config.levelMeter
             readonly property var shown: meterLoader.item ? meterLoader.item.shown : [0, 0, 0, 0]
+            // "levelMeterOverlay" (default OFF): the bars are drawn by MeterPatch, a 16x14 window of their own over this slot,
+            // so their 25 changes a second do not repaint the whole bar surface; this Row then only keeps the slot. Measured
+            // 2026-09-23 on the RTX 5080: no difference (the 8 % kwin seen while music played was Firefox's video); it is
+            // there for weak integrated GPUs, where a 2400x700 repaint 25 times a second is real work.
+            readonly property bool overlay: Config.get("levelMeterOverlay", false) === true
+            // where the slot is on the screen: the mapping is not a binding on its own, so everything that moves it is read here
+            // (the dependencies go in as arguments: a bare read in a binding is optimised away, see Config.load)
+            function slotOnScreen(tick, slide, w, x, left) { const p = levels.mapToItem(null, 0, 0); return Qt.point(Math.round(p.x + left), Math.round(p.y)) }
+            readonly property point onScreen: slotOnScreen(island.layoutTick, island.slideY, island.width, levels.x, island.barLeft)
             Repeater { model: 4
                 Rectangle { required property int index
-                    readonly property real level: levels.shown[index] || 0
+                    readonly property real level: levels.overlay ? 0 : (levels.shown[index] || 0)
                     width: 2; radius: 1; anchors.verticalCenter: parent.verticalCenter
-                    height: 3 + 11 * level
+                    height: 3 + 11 * level; visible: !levels.overlay
                     color: Config.fg(0.5 + 0.45 * level) } }      // no Behavior: easing a value that changes 25x a second repaints this wide surface at the full 240 Hz
         }
     }
+    Loader { active: levels.overlay && !row.spectrum && Config.levelMeter; source: "MeterPatch.qml"
+        onLoaded: { item.host = levels; item.shown = Qt.binding(() => levels.shown); item.gx = Qt.binding(() => levels.onScreen.x); item.gy = Qt.binding(() => levels.onScreen.y); item.live = Qt.binding(() => levels.live && levels.visible); island.layoutTick++ }
+        onStatusChanged: if (status === Loader.Error) console.warn("bar: meter overlay unavailable") }
     Loader { id: meterLoader; active: !row.spectrum; source: "LevelMeter.qml"; onLoaded: item.live = Qt.binding(() => levels.live)   // (outside the Row: a Loader in it would take a spacing slot)
         onStatusChanged: if (status === Loader.Error) console.warn("bar: level meter unavailable (org.kde.plasma.private.volume)") }
     HoverHandler { id: hover }

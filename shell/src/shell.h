@@ -4,6 +4,7 @@
 #include <QKeySequence>
 #include <QDBusMessage>
 #include <QHash>
+#include <QSet>
 #include <QObject>
 #include <QFileSystemWatcher>
 #include <QJsonObject>
@@ -54,12 +55,18 @@ public:
     Q_INVOKABLE void removeConfigKeys(const QStringList &keys);
     Q_INVOKABLE QVariantMap sysStats();                                  // {cpu: 0..1 since the last call, mem: 0..1}
     Q_INVOKABLE int sinceStart() const;                         // ms since the process started (start-up budget marks)
+    // ---- start-up self-test and crash report (see selfTest() / crashReport() in shell.cpp)
+    Q_INVOKABLE void markReady(const QString &what);            // a surface reports its first frame ("top", "bottom", "wallpaper")
+    Q_INVOKABLE void selfTest();                                 // a few seconds after start: what came up, one journal line, a notification when something did not
+    Q_INVOKABLE void crashReport();                              // at start: was the previous run ended by a crash? then a report file + a notification
     static void markStart();
     static qint64 msSinceStart();
     // edit scene: glass behind `panels` (rounded rects), input everywhere except `holes` (the bar and the dock stay clickable)
     Q_INVOKABLE void setSceneRegions(QQuickWindow *window, const QVariantList &panels, const QVariantList &holes);
     Q_INVOKABLE void setupSearch(QQuickWindow *window);
     Q_INVOKABLE void setupCapture(QQuickWindow *window);         // screenshot overlay: over everything, no glass treatment
+    Q_INVOKABLE void setupPatch(QQuickWindow *window, int x, int y);   // a tiny top-layer window at (x, y) of its screen, no input, no glass: the level meter
+    Q_INVOKABLE void movePatch(QQuickWindow *window, int x, int y);
     // a notification of our own. showPath: a file; clicking the notification (or its "Show in folder" button) opens the
     // file manager with that file selected
     Q_INVOKABLE void notify(const QString &title, const QString &text, const QString &imagePath, const QString &showPath = QString());
@@ -171,6 +178,9 @@ private Q_SLOTS:
 private:
     quint64 m_cpuIdle = 0, m_cpuTotal = 0;
     QHash<uint, QString> m_notifyPaths;                          // our notifications that open a folder when clicked
+    QSet<QString> m_ready;                                       // surfaces that drew a first frame (self-test)
+    QString m_crashFile;                                         // the last crash report, for its notification's buttons
+    void notifyWithActions(const QString &title, const QString &text, const QString &icon, const QStringList &actions, const QString &token, bool resident);
     bool m_notifyListening = false;
     void watchConfig();
     QJsonObject readConfigObject() const;

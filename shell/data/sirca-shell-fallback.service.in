@@ -1,7 +1,9 @@
 [Unit]
 Description=Sirca Shell kept crashing: give the Plasma panels back
 
+# OnFailure= fires on EVERY failure of sirca-shell.service, also the ones Restart=on-failure recovers from (systemd 259:
+# one simulated crash put the Plasma panels back, 2026-09-23). Only the start limit (five failures in a minute) means
+# "kept crashing": anything else is left to the restart.
 [Service]
 Type=oneshot
-ExecStart=@SIRCA_SHELL_BINDIR@/sirca-shell-switch off
-ExecStartPost=-/usr/bin/notify-send -a "Sirca Shell" -i dialog-warning "Sirca Shell failed repeatedly" "The Plasma panels were restored. Run 'sirca-shell-switch on' to try again; see 'journalctl --user -u sirca-shell'."
+ExecStart=/bin/sh -c 'r="$(systemctl --user show sirca-shell.service -p Result --value)"; [ "$r" = start-limit-hit ] || { echo "sirca-shell failed with $r: the restart handles it"; exit 0; }; "@SIRCA_SHELL_BINDIR@/sirca-shell-switch" off; notify-send -a "Sirca Shell" -i dialog-warning "Sirca Shell failed repeatedly" "The Plasma panels were restored. Run '"'"'sirca-shell-switch on'"'"' to try again; see '"'"'journalctl --user -u sirca-shell'"'"'."'

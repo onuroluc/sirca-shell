@@ -109,7 +109,7 @@ Window {
     property double lastSwap: 0
     property double worst: 0
     property bool firstFrameLogged: false
-    onFrameSwapped: { if (!firstFrameLogged) { firstFrameLogged = true; console.log("start-up: first frame of", edge, "after", Shell.sinceStart(), "ms") } frames++; const t = Date.now(); if (lastSwap > 0) worst = Math.max(worst, t - lastSwap); lastSwap = t }
+    onFrameSwapped: { if (!firstFrameLogged) { firstFrameLogged = true; console.log("start-up: first frame of", edge, "after", Shell.sinceStart(), "ms"); Shell.markReady(edge) } frames++; const t = Date.now(); if (lastSwap > 0) worst = Math.max(worst, t - lastSwap); lastSwap = t }
     // frame meter (Sirca Settings > Behaviour, or --fps): frames this surface swapped in the last half second and the longest
     // gap between two of them. At rest it must read 0: a number that never drops to 0 means something repaints for nothing.
     readonly property bool meter: Config.showFps || Qt.application.arguments.indexOf("--fps") >= 0

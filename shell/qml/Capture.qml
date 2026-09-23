@@ -49,7 +49,7 @@ Window {
         if (mode === "record") { const q = Qt.rect(r.x, r.y, r.width, r.height); cancel(); if (dryRun) console.log("record (dry run):", q); else startLater.go(q); return }
         const path = dryRun ? "" : Screenshot.finish(r.x, r.y, r.width, r.height, cw.width, true, true)
         if (dryRun) console.log("capture (dry run):", r.x, r.y, r.width, r.height)
-        else if (path !== "") Shell.notify("Screenshot", "Saved and copied  ·  " + path.substring(path.lastIndexOf("/") + 1), path, path)
+        // the file is written on a worker thread: the notification comes from onSaved once it is there
         done.restart(); flashAnim.restart()
     }
     Timer { id: done; interval: 170; onTriggered: cw.cancel() }
@@ -57,7 +57,8 @@ Window {
     Timer { id: startLater; interval: 220; property rect r; function go(q) { r = q; restart() } onTriggered: cw.recordRequested(r.x, r.y, r.width, r.height) }
     Connections { target: Screenshot
         function onFrameChanged() { if (cw.pending && Screenshot.ready) cw.reveal() }
-        function onFailed(why) { if (!cw.pending) return; cw.pending = false; console.warn("screenshot failed:", why); Shell.notify("Screenshot failed", why, "") } }
+        function onFailed(why) { if (!cw.pending) return; cw.pending = false; console.warn("screenshot failed:", why); Shell.notify("Screenshot failed", why, "") }
+        function onSaved(path, w, h) { if (path !== "") Shell.notify("Screenshot", "Saved and copied  ·  " + path.substring(path.lastIndexOf("/") + 1), path, path); else Shell.notify("Screenshot failed", "The file could not be written", "") } }
 
     Image { id: frame; anchors.fill: parent; cache: false; asynchronous: false; smooth: true
         source: cw.visible && Screenshot.ready ? "image://shot/frame" + Screenshot.revision : "" }

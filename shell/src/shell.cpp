@@ -17,6 +17,10 @@
 #include <QDBusServiceWatcher>
 #include <QDBusMessage>
 #include <QDBusReply>
+#include <QSet>
+#include <QSysInfo>
+#include <QUrlQuery>
+#include <QDBusInterface>
 #include <QDBusVariant>
 #include <QDir>
 #include <QProcess>
@@ -583,6 +587,31 @@ void Shell::setupCapture(QQuickWindow *window)
     lw->setExclusiveZone(-1);
 }
 
+// The level meter's own window: the four bars change up to 25 times a second, and every change repainted the whole bar
+// surface (a 5120-wide layer window: ~8 % of a core in KWin and 3 % GPU while music played, measured 2026-09-23). In a
+// 16x14 window of its own the damage is 16x14. Top layer like the bar (mapped later, so above it), no input, no keyboard,
+// its own scope so the Glass effect never treats it as a panel. Position = margins from the screen's top-left corner.
+void Shell::setupPatch(QQuickWindow *window, int x, int y)
+{
+    if (!window) return;
+    using W = LayerShellQt::Window;
+    auto *lw = W::get(window);
+    lw->setLayer(W::LayerTop);
+    lw->setScope(QStringLiteral("glass-patch"));
+    lw->setKeyboardInteractivity(W::KeyboardInteractivityNone);
+    lw->setAnchors(W::Anchors(W::AnchorTop | W::AnchorLeft));
+    lw->setExclusiveZone(-1);
+    lw->setMargins(QMargins(x, y, 0, 0));
+    lw->setScreen(window->screen());
+    window->setFlag(Qt::WindowTransparentForInput, true);
+}
+
+void Shell::movePatch(QQuickWindow *window, int x, int y)
+{
+    if (!window) return;
+    LayerShellQt::Window::get(window)->setMargins(QMargins(x, y, 0, 0));
+}
+
 void Shell::notify(const QString &title, const QString &text, const QString &imagePath, const QString &showPath)
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
@@ -607,15 +636,124 @@ void Shell::notify(const QString &title, const QString &text, const QString &ima
     });
 }
 
-void Shell::onNotificationAction(uint id, const QString &)
+void Shell::onNotificationAction(uint id, const QString &action)
 {
     const QString file = m_notifyPaths.take(id);
     if (file.isEmpty()) return;
     if (file == QLatin1String("<update>")) { runUpdate(); return; }
+    if (file == QLatin1String("<crash>") && action != QLatin1String("issue")) { QProcess::startDetached(QStringLiteral("xdg-open"), {m_crashFile}); return; }
+    if (file == QLatin1String("<crash>")) {
+        QUrl u(QStringLiteral("https://github.com/onuroluc/sirca-shell/issues/new"));
+        QUrlQuery q; q.addQueryItem(QStringLiteral("title"), QStringLiteral("Crash: (what were you doing?)"));
+        q.addQueryItem(QStringLiteral("body"), QStringLiteral("Version %1 (build %2)\n\nWhat I was doing:\n\n\nPaste the report here (it opened in your editor; it is also at %3):\n\n").arg(version(), buildCommit().left(7), m_crashFile));
+        u.setQuery(q); QProcess::startDetached(QStringLiteral("xdg-open"), {u.toString()}); return; }
     // Dolphin directly, not org.freedesktop.FileManager1: Nautilus, Nemo and Dolphin all register that name here and
     // D-Bus activation would pick whichever it likes. --select opens the folder with the file highlighted.
     if (!QProcess::startDetached(QStringLiteral("dolphin"), {QStringLiteral("--select"), file}))
         QProcess::startDetached(QStringLiteral("xdg-open"), {QFileInfo(file).absolutePath()});
+}
+
+// A notification with buttons (the update, the crash report): the action ids come back through onNotificationAction
+// with the token stored under the notification's id.
+void Shell::notifyWithActions(const QString &title, const QString &text, const QString &icon, const QStringList &actions, const QString &token, bool resident)
+{
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    const QString svc = QStringLiteral("org.freedesktop.Notifications"), path = QStringLiteral("/org/freedesktop/Notifications");
+    if (!m_notifyListening) { m_notifyListening = true;
+        bus.connect(svc, path, svc, QStringLiteral("ActionInvoked"), this, SLOT(onNotificationAction(uint, QString)));
+        bus.connect(svc, path, svc, QStringLiteral("NotificationClosed"), this, SLOT(onNotificationClosed(uint, uint))); }
+    QDBusMessage m = QDBusMessage::createMethodCall(svc, path, svc, QStringLiteral("Notify"));
+    QVariantMap hints{{QStringLiteral("desktop-entry"), QStringLiteral("sirca-shell")}};
+    if (resident) hints.insert(QStringLiteral("resident"), true);
+    m.setArguments({QStringLiteral("Sirca Shell"), uint(0), icon, title, text, actions, hints, resident ? 0 : 15000});
+    auto *w = new QDBusPendingCallWatcher(bus.asyncCall(m), this);
+    connect(w, &QDBusPendingCallWatcher::finished, this, [this, token](QDBusPendingCallWatcher *w) { w->deleteLater(); const QDBusPendingReply<uint> reply = *w; if (!reply.isError()) m_notifyPaths.insert(reply.value(), token); });
+}
+
+void Shell::markReady(const QString &what)
+{
+    m_ready.insert(what);
+    // the login splash waits for plasmashell's "desktop" stage; without plasmashell (withoutPlasmashell) the shell says it
+    // once bar and dock have drawn, or ksplash sits there until its own timeout. Harmless when no splash is running.
+    static bool splashTold = false;
+    if (!splashTold && m_ready.contains(QStringLiteral("top")) && m_ready.contains(QStringLiteral("bottom")) && loadConfig().value(QStringLiteral("withoutPlasmashell"), false).toBool()) {
+        splashTold = true;
+        QDBusConnection::sessionBus().asyncCall(QDBusMessage::createMethodCall(QStringLiteral("org.kde.KSplash"), QStringLiteral("/KSplash"), QStringLiteral("org.kde.KSplash"), QStringLiteral("setStage")) << QStringLiteral("desktop"));
+        qInfo("sirca-shell: told ksplash the desktop is up");
+    }
+}
+
+// ---- Start-up self-test: a few seconds in, is everything that should be there, there? One line in the journal either
+// way ("self-test: bar ok, dock ok, ..."), and a notification only when something is missing, so "my bar is gone" comes
+// with the reason attached. Config "selfTestNotify": false keeps the notification away.
+void Shell::selfTest()
+{
+    QStringList ok, bad;
+    auto check = [&](bool good, const QString &name, const QString &why) { if (good) ok << name; else bad << name + QStringLiteral(" (") + why + QLatin1Char(')'); };
+    const QVariantMap cfg = loadConfig();
+    // the primary screen carries bar and dock unless "screens": { <name>: { bar: false / dock: false } } says otherwise;
+    // another screen listed with bar: true counts too
+    const QVariantMap screens = cfg.value(QStringLiteral("screens")).toMap();
+    auto wanted = [&](const QString &key) { bool any = false, primaryListed = false;
+        for (auto it = screens.begin(); it != screens.end(); ++it) { const QVariantMap c = it.value().toMap(); const bool isPrimary = it.key() == primaryScreenName();
+            if (isPrimary) primaryListed = true; if (c.value(key, isPrimary).toBool()) any = true; }
+        return any || !primaryListed; };
+    const bool wantBar = wanted(QStringLiteral("bar")), wantDock = wanted(QStringLiteral("dock"));
+    if (wantBar) check(m_ready.contains(QStringLiteral("top")), QStringLiteral("bar"), QStringLiteral("no first frame: is the layer shell available? is another shell holding the top edge?"));
+    if (wantDock) check(m_ready.contains(QStringLiteral("bottom")), QStringLiteral("dock"), QStringLiteral("no first frame"));
+    check(QDBusConnection::sessionBus().interface()->isServiceRegistered(QStringLiteral("onur.SircaShell")), QStringLiteral("D-Bus name"), QStringLiteral("onur.SircaShell is not ours: a second instance?"));
+    // global shortcuts: ours must be known to kglobalaccel (the Search key is registered unconditionally)
+    QString comp = QCoreApplication::applicationName(); comp.replace(QLatin1Char('-'), QLatin1Char('_'));
+    QDBusReply<QStringList> names = QDBusInterface(QStringLiteral("org.kde.kglobalaccel"), QStringLiteral("/component/") + comp, QStringLiteral("org.kde.kglobalaccel.Component")).call(QStringLiteral("shortcutNames"));
+    check(names.isValid() && names.value().contains(QStringLiteral("search")), QStringLiteral("shortcuts"), QStringLiteral("kglobalaccel does not list ours: is kglobalacceld running?"));
+    auto *fake = qobject_cast<KWayland::Client::FakeInput *>(m_fakeInput);
+    check(fake && fake->isValid(), QStringLiteral("fake input"), QStringLiteral("org_kde_kwin_fake_input not granted: the desktop file must list it (installed by install.sh)"));
+    // the Glass effect: without it the bar is a flat translucent strip
+    const QStringList effects = QDBusInterface(QStringLiteral("org.kde.KWin"), QStringLiteral("/Effects"), QStringLiteral("org.kde.kwin.Effects")).property("loadedEffects").toStringList();
+    bool glass = false; for (const QString &e : effects) if (e.startsWith(QLatin1String("glass")) && !e.startsWith(QLatin1String("glasskey"))) glass = true;
+    check(glass, QStringLiteral("Glass effect"), QStringLiteral("no glass* effect loaded in KWin: the bar has no blur (install the effect, or System Settings > Desktop Effects)"));
+    check(QDBusConnection::sessionBus().interface()->isServiceRegistered(QStringLiteral("org.freedesktop.Notifications")), QStringLiteral("notifications"), QStringLiteral("no notification server on the bus"));
+    qInfo("sirca-shell: self-test: ok: %s%s%s", qPrintable(ok.join(QStringLiteral(", "))), bad.isEmpty() ? "" : "; MISSING: ", qPrintable(bad.join(QStringLiteral("; "))));
+    if (bad.isEmpty() || !cfg.value(QStringLiteral("selfTestNotify"), true).toBool()) return;
+    notifyWithActions(QStringLiteral("Sirca Shell started with problems"), bad.join(QStringLiteral("\n")) + QStringLiteral("\n\nDetails: journalctl --user -u %1").arg(QCoreApplication::applicationName()),
+                      QStringLiteral("dialog-warning"), {}, QString(), false);
+}
+
+// ---- Crash report: systemd restarts the shell on failure (Restart=on-failure) and counts it in NRestarts; a fresh
+// start after such a restart writes the previous run's last journal lines and the machine's basics into a report file
+// under the state folder and says so, with buttons to open it and to file an issue. A plain `systemctl restart` resets
+// NRestarts, so a reload never counts as a crash.
+void Shell::crashReport()
+{
+    const QString unit = QCoreApplication::applicationName() + QStringLiteral(".service");
+    QProcess p; p.start(QStringLiteral("systemctl"), {QStringLiteral("--user"), QStringLiteral("show"), unit, QStringLiteral("-p"), QStringLiteral("NRestarts"), QStringLiteral("--value")});
+    if (!p.waitForFinished(2000)) return;
+    const int restarts = QString::fromUtf8(p.readAllStandardOutput()).trimmed().toInt();
+    if (restarts <= 0) return;
+    const QString stateDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation); QDir().mkpath(stateDir);
+    // once per run: systemd gives every start its own INVOCATION_ID (the restart count resets on a manual restart)
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    const QByteArray invocation = qgetenv("INVOCATION_ID");
+    const QString marker = stateDir + QStringLiteral("/crash-reported");
+    QFile mf(marker); if (!invocation.isEmpty() && mf.open(QIODevice::ReadOnly) && mf.readAll().trimmed() == invocation) return;
+    mf.close();
+    QProcess j; j.start(QStringLiteral("journalctl"), {QStringLiteral("--user"), QStringLiteral("-u"), unit, QStringLiteral("-b"), QStringLiteral("-n"), QStringLiteral("120"), QStringLiteral("--no-pager"), QStringLiteral("-o"), QStringLiteral("short-iso")});
+    j.waitForFinished(4000);
+    QString lines = QString::fromUtf8(j.readAllStandardOutput());
+    // only what came before this run's first line
+    const int cut = lines.lastIndexOf(QStringLiteral("start-up: Shell singleton built"));
+    if (cut > 0) { const int nl = lines.lastIndexOf(QLatin1Char('\n'), cut); if (nl > 0) lines = lines.left(nl); }
+    QProcess pv; pv.start(QStringLiteral("plasmashell"), {QStringLiteral("--version")}); pv.waitForFinished(2000);
+    QProcess nv; nv.start(QStringLiteral("nvidia-smi"), {QStringLiteral("--query-gpu=driver_version,name"), QStringLiteral("--format=csv,noheader")}); nv.waitForFinished(2000);
+    const QString report = QStringLiteral("Sirca Shell crash report  %1\n\nversion %2  build %3\nrestart #%4 of this session (systemd NRestarts)\n%5kernel %6\nGPU %7\n\n---- last journal lines of the run that ended ----\n%8\n")
+        .arg(QDateTime::currentDateTime().toString(Qt::ISODate), version(), buildCommit().left(7)).arg(restarts)
+        .arg(QString::fromUtf8(pv.readAllStandardOutput()).trimmed() + QLatin1Char('\n'), QSysInfo::kernelVersion(), QString::fromUtf8(nv.readAllStandardOutput()).trimmed(), lines);
+    m_crashFile = stateDir + QStringLiteral("/crash-") + stamp + QStringLiteral(".txt");
+    QFile f(m_crashFile); if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return; f.write(report.toUtf8()); f.close();
+    if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate)) mf.write(invocation);
+    qWarning("sirca-shell: the previous run ended by a crash (restart #%d); report: %s", restarts, qPrintable(m_crashFile));
+    notifyWithActions(QStringLiteral("Sirca Shell restarted after a crash"), QStringLiteral("The last lines of its log are in a report. If it keeps happening, please file it so it can be fixed."),
+                      QStringLiteral("dialog-error"), {QStringLiteral("default"), QStringLiteral("Show report"), QStringLiteral("show"), QStringLiteral("Show report"), QStringLiteral("issue"), QStringLiteral("File an issue")}, QStringLiteral("<crash>"), true);
 }
 
 void Shell::onNotificationClosed(uint id, uint) { if (m_notifyPaths.size() > 64) m_notifyPaths.clear(); Q_UNUSED(id) }   // entries stay for the history; just bounded

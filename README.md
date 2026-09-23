@@ -119,6 +119,12 @@ one. The switch is in the shell's settings under Behaviour.
 | Without the KWin effect | works, but flat: see-through surfaces with no blur and no lit edge |
 | NVIDIA | yes, developed on it |
 | AMD, Intel | untested. Please tell me how it goes |
+| Without plasmashell | yes: `sirca-shell-switch plasma off` masks it and the shell takes over the desktop, the OSD and notifications (this is how I run it now). `plasma on` brings it back |
+
+**How heavy is it?** On my machine (7800X3D, RTX 5080, one 5120x1440 screen), from systemd's own accounting of
+whole-day sessions: plasmashell with its panels averaged 1.4–1.6 % of one core, Sirca Shell doing the same job 0.2–0.4 %,
+with a similar memory footprint (about 420 MB resident, peaks under 1 GB for both). Not a benchmark, just my days. The
+KWin effect is the part that costs GPU time, and it costs the same with or without the shell.
 
 ## What is in here
 
