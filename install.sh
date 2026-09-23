@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sirca Shell — interactive installer.      ./install.sh            guided, asks before every step that matters
+# Sirca Shell - interactive installer.      ./install.sh            guided, asks before every step that matters
 #                                           ./install.sh --dry-run  shows exactly what would run, changes nothing
 #                                           ./install.sh --preset shell|look|full --yes      unattended
 # It installs for the CURRENT USER. Two optional components need sudo (the KWin effect and the Qt style); you are asked
@@ -32,7 +32,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # ------------------------------------------------------------------------------------------------ 1. what this is
 clear 2>/dev/null || true
 cat <<TXT
-${B}Sirca Shell${N}  —  a liquid-glass top bar and dock for KDE Plasma, with the themes that go with it.
+${B}Sirca Shell${N}  -  a liquid-glass top bar and dock for KDE Plasma, with the themes that go with it.
 
 This installer is a conversation, not a one-liner. It will
   1. look at your system and tell you what will and will not work on it,
@@ -62,7 +62,7 @@ done
 [ $ECM_OK = 1 ] && ok "extra-cmake-modules (KDE's CMake modules)" || { bad "extra-cmake-modules is not installed (that is the package name on Ubuntu, Fedora and Arch alike): the shell, the KWin effect and the Qt style all begin with find_package(ECM) and none of them can configure without it."; FATAL=1; }
 PYS=/usr/bin/python3; [ -x "$PYS" ] || PYS=python3        # the tools run with the system python
 GPU="$(lspci 2>/dev/null | grep -iE 'vga|3d|display' | head -1 | sed 's/.*: //')"
-case "$GPU" in *NVIDIA*|*nvidia*) ok "GPU: ${GPU:0:60}  (what this was developed on)" ;; "") warn "GPU not detected" ;; *) warn "GPU: ${GPU:0:60}  — AMD and Intel are untested by the author. It should work; please report what you see." ;; esac
+case "$GPU" in *NVIDIA*|*nvidia*) ok "GPU: ${GPU:0:60}  (what this was developed on)" ;; "") warn "GPU not detected" ;; *) warn "GPU: ${GPU:0:60}  - AMD and Intel are untested by the author. It should work; please report what you see." ;; esac
 OUTS="$(kscreen-doctor -j 2>/dev/null | "${PYS:-python3}" -c 'import json,sys; print(sum(1 for o in json.load(sys.stdin).get("outputs", []) if o.get("enabled")))' 2>/dev/null || echo 1)"
 [ "${OUTS:-1}" -gt 1 ] && warn "$OUTS screens: the wallpaper goes on every screen; the bar and dock start on the primary one (edit mode > Screens puts them where you want). Tested with virtual screens only: please report." || ok "one screen"
 "$PYS" -c 'import PIL, numpy' 2>/dev/null && ok "python: Pillow + numpy (wallpaper tools)" || warn "python Pillow / numpy missing: the bundled wallpapers still work, only re-colouring your own wallpaper will not."
@@ -98,7 +98,7 @@ cat <<TXT
     if you have Darkly installed (the original is kept as darkly6.so.orig-glass).
   • Nothing is sent anywhere. No telemetry, no network access except what your desktop already does.
 TXT
-if ! ask "Understood — continue?" y; then say "Nothing was changed."; exit 0; fi
+if ! ask "Understood. Continue?" y; then say "Nothing was changed."; exit 0; fi
 
 # ------------------------------------------------------------------------------------------------ 4. choose
 head_ "3. What do you want?"

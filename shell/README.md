@@ -9,23 +9,23 @@ the window manager. Popups are not separate windows: they grow out of the bar an
 
 ## What is in it
 
-- **Top bar** — show desktop, workspaces, tray (StatusNotifier host with its own menus), focused window title, clock
+- **Top bar** - show desktop, workspaces, tray (StatusNotifier host with its own menus), focused window title, clock
   (volume and brightness changes show inside the clock pill), now-playing with a live level meter, notifications,
   quick settings; optional date and CPU / memory widgets.
-- **Dock** — pinned and running apps, hover zoom, window previews with peek, per-window pills, badges, drag to
+- **Dock** - pinned and running apps, hover zoom, window previews with peek, per-window pills, badges, drag to
   reorder, launch hop; the app launcher grows out of it.
-- **Popups** — launcher with search, quick settings (network, Bluetooth, audio, brightness, night light, power),
+- **Popups** - launcher with search, quick settings (network, Bluetooth, audio, brightness, night light, power),
   calendar, notification history grouped per app, now-playing panel, tray menus.
-- **Tools** — search (Meta+Space, KRunner's engine: apps, files, settings, and sums or conversions such as `12*7` or
+- **Tools** - search (Meta+Space, KRunner's engine: apps, files, settings, and sums or conversions such as `12*7` or
   `5 km in mi`), clipboard history (Meta+V; Ctrl+P pins an entry: it stays on top and survives "Clear"), screenshot and screen recording
   (Meta+Shift+S / Meta+Shift+R), tile picker for wide screens (Meta+A), window switcher (Alt+Tab), power menu
   (Ctrl+Alt+Del).
-- **Do Not Disturb, timed** — the quick-settings tile steps through: an hour, until the morning, until switched off.
+- **Do Not Disturb, timed** - the quick-settings tile steps through: an hour, until the morning, until switched off.
 - **A welcome card** on the first start names the things nobody finds alone (again: `qdbus6 onur.SircaShell /SircaShell onur.SircaShell.showWelcome`).
-- **Edit mode** — right click an empty spot on the bar or the dock. Widgets become chips you drag between left, centre
+- **Edit mode** - right click an empty spot on the bar or the dock. Widgets become chips you drag between left, centre
   and right or remove; handles resize the bar; two strips hold every option (sizes, width modes, blur / tint / edge /
   sheen / shadow / haze per surface, clock format, dock behaviour …). Everything applies while you drag.
-- **Safety** — `sirca-shell-reload` refuses a build that does not load; five crashes in a minute restore the Plasma
+- **Safety** - `sirca-shell-reload` refuses a build that does not load; five crashes in a minute restore the Plasma
   panels automatically; your Plasma layout is saved and restored exactly.
 
 ## What it needs
@@ -156,9 +156,9 @@ known look keys with sane values, never runs anything, keeps your own wallpapers
 
 ## Layout of the code
 
-- `src/` — C++: layer-shell setup, shapes → blur region and input mask, global shortcuts, D-Bus, config, tray host,
+- `src/` - C++: layer-shell setup, shapes → blur region and input mask, global shortcuts, D-Bus, config, tray host,
   apps model, clipboard, screenshots, recording.
-- `qml/` — everything you see. `Surface.qml` is a layer-shell window whose shape is the union of its lobes;
+- `qml/` - everything you see. `Surface.qml` is a layer-shell window whose shape is the union of its lobes;
   `TopBar.qml`, `Dock.qml`; `EditScene.qml`; `Config.qml` holds every token and default.
 - `sirca-shell --check` compiles every QML file without showing anything; `sirca-shell-reload` runs it before a restart.
 

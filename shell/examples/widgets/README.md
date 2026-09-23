@@ -6,9 +6,9 @@ widget kind `user:<name>` (in `barLeft` / `barCenter` / `barRight`).
 
 Two kinds:
 
-- **`Widget.qml`** — any QML Item. See `hello/Widget.qml` for what it can reach (`widget.config`, `widget.shell`,
+- **`Widget.qml`** - any QML Item. See `hello/Widget.qml` for what it can reach (`widget.config`, `widget.shell`,
   `widget.height`, `widget.quiet`, `widget.hovered`); `import SircaShell` works too.
-- **`widget.json` alone** — the built-in *Exec* type, see `uptime/`:
+- **`widget.json` alone** - the built-in *Exec* type, see `uptime/`:
 
   ```json
   { "label": "Uptime", "icon": "chronometer-symbolic", "exec": "uptime.sh", "interval": 30, "click": "xdg-open /proc/uptime" }

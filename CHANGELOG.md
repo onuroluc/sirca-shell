@@ -2,7 +2,11 @@
 
 Versions, newest first. `./update.sh` brings you to the newest one; the shell can also check once a day (Sirca Settings › Behaviour › Updates).
 
-## 0.6.0 — 2026-09-23
+## 0.6.1 (2026-09-23)
+
+- Wording only: the README, this file and the installer's text, no code changes.
+
+## 0.6.0 (2026-09-23)
 
 - Start-up self-test: six seconds after start the shell checks that the bar and dock drew, its shortcuts are registered,
   fake input was granted, the Glass effect is loaded and a notification server exists. One journal line
@@ -27,9 +31,9 @@ CPU accounting of whole-day sessions, so real use rather than a benchmark:
 Start to first frame is about 0.4 s. A notification card used to cost 10 % CPU and 11 % GPU while it was on screen
 (the bar repainted every frame); since 0.5.0 it is close to nothing. Popups and idle are the same as before.
 
-## 0.5.0 — 2026-09-23
+## 0.5.0 (2026-09-23)
 
-The first numbered version. Everything before this was "whatever main was" — from here on main only moves when a version is
+The first numbered version. Everything before this was "whatever main was" - from here on main only moves when a version is
 released, and hotfixes get their own number (0.5.1, …).
 
 Since the last un-numbered push:
