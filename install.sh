@@ -147,7 +147,7 @@ NEED_SUDO=$(( ON[effect] + ON[qt] ))
 [ $DRY = 1 ] || printf '%s\n' "$ROOT" > "$STATE/root.txt"                                           # the shell's "Update now" and update.sh read this
 [ $DRY = 1 ] || { for k in shell effect look mode lock qt setup; do [ "${ON[$k]:-0}" = 1 ] && printf '%s ' "$k"; done; echo; } > "$STATE/parts.txt"   # what was chosen, re-used by update.sh
 [ $NEED_SUDO -gt 0 ] && say "  ${B}sudo will be asked for${N} by: $([ ${ON[effect]} = 1 ] && printf 'the KWin effect  ')$([ ${ON[qt]} = 1 ] && printf 'the Qt style and decoration')"
-UPDATE_CHECK=0; [ $YES = 1 ] || { ask "Let the shell check GitHub once a day for a new version, and offer to update? (one small request to api.github.com; nothing else is sent)" n && UPDATE_CHECK=1; }
+UPDATE_CHECK=0; [ $YES = 1 ] || { ask "Let the shell check GitHub once a day for a new version, and offer to update? (one small request for the VERSION file on GitHub; nothing else is sent)" n && UPDATE_CHECK=1; }
 if ! ask "Install now?" y; then say "Nothing was changed."; exit 0; fi
 
 # ------------------------------------------------------------------------------------------------ 6. install

@@ -17,7 +17,7 @@ Item {
     id: qs
     property bool expanded: false
     signal closeRequested()
-    onExpandedChanged: if (!expanded) { page = "main"; shownPage = "main"; paletteOpen = false }
+    onExpandedChanged: if (!expanded) { page = "main"; shownPage = "main"; paletteOpen = false; arranging = false }
     // our own sliders drive the bar's volume display DIRECTLY while they move (the normal route, PulseAudio -> plasmashell ->
     // D-Bus -> the bar, trails the pointer by a round trip per step)
     signal osdRequested(string icon, real fraction)
@@ -111,6 +111,55 @@ Item {
         notif.save(); qs.dndTick++ }
     function openKcm(name) { KCMLauncher.openSystemSettings(name); qs.closeRequested() }
 
+    // ---- tiles as data (Config "qsTiles": the shown ids in order; the rows "sun" and "sliders" ride in the same list)
+    readonly property var allTiles: ["network", "bluetooth", "dnd", "nightlight", "power", "caffeine", "mic", "displays", "settings"]
+    readonly property var allIds: allTiles.concat(["sun", "sliders"])
+    // (a list from the config arrives as a sequence wrapper, not a JS Array: Array.isArray is false for it, hence the length test)
+    readonly property var tileOrder: { const v = Config.get("qsTiles", null); return v && v.length !== undefined ? Array.prototype.slice.call(v).filter(x => allIds.indexOf(x) >= 0) : allIds }
+    readonly property var gridTiles: tileOrder.filter(x => allTiles.indexOf(x) >= 0)
+    function rowShown(id) { return (arranging ? arrangeOn : tileOrder).indexOf(id) >= 0 }
+    // every property a tile needs, read from the backends: the binding re-evaluates when any of them changes
+    function tileData(id) { switch (id) {
+        case "network": return { available: true, icon: net ? net.icon : "network-wired-symbolic", title: "Network", on: netName !== "", more: !!net,
+            status: !net ? "Unavailable" : netName !== "" ? netName + (net.activeVpn !== "" && netName.indexOf(net.activeVpn) < 0 ? " · " + net.activeVpn : "") : "Not connected" }
+        case "bluetooth": return { available: true, icon: btOn ? "network-bluetooth-activated-symbolic" : "network-bluetooth-inactive-symbolic", title: "Bluetooth", on: btOn, more: true,
+            status: !bt ? "Unavailable" : !btOn ? "Off" : (btName !== "" ? btName : "On") }
+        case "dnd": return { available: true, icon: dndOn ? "notifications-disabled-symbolic" : "notifications-symbolic", title: "Do Not Disturb", status: dndStatus, on: dndOn, more: false }
+        case "nightlight": return { available: true, icon: "redshift-status-on", title: "Night Light", status: night ? night.statusText : "Unavailable", on: night ? night.on : false, more: true }
+        // a tap steps power-saver -> balanced -> performance; lit unless it sits on the middle one. Absent daemon: no tile.
+        case "power": return { available: power.available, icon: power.icon(power.active), title: "Power profile", status: powerStatus, on: power.available && power.active !== "balanced", more: true }
+        case "caffeine": return { available: true, icon: caffeine.active ? "system-suspend-inhibited" : "system-suspend-uninhibited", title: "Caffeine", status: caffeine.status, on: caffeine.active, more: false }
+        // the default source's mute; lit while the microphone is live. No source (no microphone at all): no tile.
+        case "mic": return { available: hasSource, icon: micMuted ? "mic-off-symbolic" : "mic-on-symbolic", title: "Microphone", status: micStatus, on: hasSource && !micMuted, more: true }
+        case "displays": return { available: true, icon: "video-display-symbolic", title: "Displays", status: bright ? bright.label : "", on: false, more: false }
+        case "settings": return { available: true, icon: "preferences-system-symbolic", title: "System Settings", status: "", on: false, more: false }
+        } return { available: false, icon: "", title: id, status: "", on: false, more: false } }
+    function tileToggle(id) { switch (id) {
+        case "network": if (!net) return; if (wifiThere) net.enableWireless(!wifiOn); else page = "network"; break
+        case "bluetooth": toggleBt(); break
+        case "dnd": toggleDnd(); break
+        case "nightlight": if (night) night.toggle(); break
+        case "power": power.cycle(); break
+        case "caffeine": caffeine.toggle(); break
+        case "mic": if (vol) vol.toggleMicMute(); break
+        case "displays": openKcm("kcm_kscreen"); break
+        case "settings": openKcm(""); break } }
+    function tileOpen(id) { switch (id) {
+        case "network": if (net) page = "network"; break
+        case "bluetooth": openKcm("kcm_bluetooth"); break
+        case "nightlight": openKcm("kcm_nightlight"); break
+        case "power": openKcm("kcm_powerdevilprofilesconfig"); break
+        case "mic": page = "sound"; break } }
+    // ---- arranging (right-click a tile): a working copy of the list until Done
+    property bool arranging: false
+    property var arrangeOn: []                                 // the shown ids, in order, while arranging
+    readonly property var arrangeList: arrangeOn.filter(x => allTiles.indexOf(x) >= 0).concat(allTiles.filter(x => arrangeOn.indexOf(x) < 0))   // shown first, hidden after
+    onArrangingChanged: if (arranging) arrangeOn = tileOrder.slice()
+    function arrangeSet(id, on) { const l = arrangeOn.filter(x => x !== id); if (on) { if (allTiles.indexOf(id) >= 0) l.splice(l.filter(x => allTiles.indexOf(x) >= 0).length, 0, id); else l.push(id) } arrangeOn = l }
+    function arrangeMove(id, slot) { if (arrangeOn.indexOf(id) < 0) return; const tiles = arrangeOn.filter(x => allTiles.indexOf(x) >= 0 && x !== id); const rows = arrangeOn.filter(x => allTiles.indexOf(x) < 0)
+        tiles.splice(Math.max(0, Math.min(tiles.length, slot)), 0, id); arrangeOn = tiles.concat(rows) }
+    function arrangeDone() { const l = arrangeOn.slice(); arranging = false; Shell.saveConfigKey("qsTiles", l) }
+
     // ---------- parts ----------
     component RoundBtn: Item { id: rb; property string icon; property string fallbackIcon: ""; property bool lit: false; property color haze: "transparent"; property int size: 34; signal tapped()
         width: size; height: size
@@ -128,6 +177,13 @@ Item {
         Kirigami.Icon { anchors.centerIn: parent; width: Math.round(rb.size * 0.47); height: width; source: rb.icon; fallback: rb.fallbackIcon; isMask: true; color: Config.fgSolid; opacity: 0.9; roundToIconSize: false }
         HoverHandler { id: rbh } TapHandler { id: rt; onTapped: rb.tapped() } }
 
+    // the arranging badge: minus on a shown item, plus on a hidden one; the ring is the panel's own colour so it reads as cut out
+    component ArrBadge: Rectangle { id: ab; property string tid; readonly property bool shown: qs.arrangeOn.indexOf(tid) >= 0
+        visible: qs.arranging; x: parent.width - 11; y: -7; width: 22; height: 22; radius: 11; z: 3
+        color: shown ? Config.attention : Config.onFill; border.width: 2; border.color: Config.dark ? Qt.rgba(0.1, 0.1, 0.12, 1) : Qt.rgba(0.96, 0.96, 0.97, 1)   // literal-ok: the badge's ring is the panel's colour
+        Rectangle { anchors.centerIn: parent; width: 10; height: 2; radius: 1; color: Config.onFg }
+        Rectangle { anchors.centerIn: parent; width: 2; height: 10; radius: 1; color: Config.onFg; visible: !ab.shown }
+        HoverHandler { cursorShape: Qt.PointingHandCursor } TapHandler { onTapped: qs.arrangeSet(ab.tid, !ab.shown) } }
     component Tile: Item { id: tile
         property string icon; property string title; property string status: ""; property bool on: false; property bool more: false
         signal toggled(); signal opened()
@@ -246,27 +302,41 @@ Item {
                 RoundBtn { icon: "system-lock-screen-symbolic"; onTapped: { Shell.dbusSend("org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver", "Lock"); qs.closeRequested() } }   // (not org.kde.plasma.private.sessions: one private module less)
                 RoundBtn { icon: "system-shutdown-symbolic"; onTapped: { qs.closeRequested(); Shell.dbusSend("onur.SircaShell", "/SircaShell", "onur.SircaShell", "togglePowerMenu") } } } }
 
-        Grid { enabled: !qs.paletteOpen   /* pointer handlers keep a passive grab: the catcher above cannot stop them, so a swatch click also hit the tile under it */; width: parent.width; columns: 2; spacing: qs.gap
+        // ---- the tile grid is data: Config "qsTiles" is the ordered list of what shows (tiles, and the "sun" and "sliders" rows);
+        // right-click a tile (or the "Arrange" hint in Sirca Settings) to arrange: every known tile shows, hidden ones dimmed,
+        // a badge shows / hides, a drag reorders, Done writes the list. Tiles whose backend is missing never show outside arranging.
+        Grid { id: grid; enabled: !qs.paletteOpen   /* pointer handlers keep a passive grab: the catcher above cannot stop them, so a swatch click also hit the tile under it */; width: parent.width; columns: 2; spacing: qs.gap
             readonly property real tw: (width - spacing) / 2
-            Tile { width: parent.tw; icon: qs.net ? qs.net.icon : "network-wired-symbolic"; title: "Network"; on: qs.netName !== ""; more: !!qs.net
-                status: !qs.net ? "Unavailable" : qs.netName !== "" ? qs.netName + (qs.net.activeVpn !== "" && qs.netName.indexOf(qs.net.activeVpn) < 0 ? " · " + qs.net.activeVpn : "") : "Not connected"
-                onToggled: { if (!qs.net) return; if (qs.wifiThere) qs.net.enableWireless(!qs.wifiOn); else qs.page = "network" } onOpened: if (qs.net) qs.page = "network" }
-            Tile { width: parent.tw; icon: qs.btOn ? "network-bluetooth-activated-symbolic" : "network-bluetooth-inactive-symbolic"; title: "Bluetooth"
-                status: !qs.bt ? "Unavailable" : !qs.btOn ? "Off" : (qs.btName !== "" ? qs.btName : "On"); on: qs.btOn; more: true; onToggled: qs.toggleBt(); onOpened: qs.openKcm("kcm_bluetooth") }
-            Tile { width: parent.tw; icon: qs.dndOn ? "notifications-disabled-symbolic" : "notifications-symbolic"; title: "Do Not Disturb"; status: qs.dndStatus; on: qs.dndOn; onToggled: qs.toggleDnd() }
-            Tile { width: parent.tw; icon: "redshift-status-on"; title: "Night Light"; status: qs.night ? qs.night.statusText : "Unavailable"; on: qs.night ? qs.night.on : false; more: true; onToggled: if (qs.night) qs.night.toggle(); onOpened: qs.openKcm("kcm_nightlight") }
-            // a tap steps power-saver -> balanced -> performance; lit unless it sits on the middle one. Absent daemon: no tile.
-            Tile { width: parent.tw; visible: power.available; icon: power.icon(power.active); title: "Power profile"; status: qs.powerStatus; on: power.available && power.active !== "balanced"; more: true
-                onToggled: power.cycle(); onOpened: qs.openKcm("kcm_powerdevilprofilesconfig") }
-            Tile { width: parent.tw; icon: caffeine.active ? "system-suspend-inhibited" : "system-suspend-uninhibited"; title: "Caffeine"; status: caffeine.status; on: caffeine.active; onToggled: caffeine.toggle() }
-            // the default source's mute; lit while the microphone is live. No source (no microphone at all): no tile.
-            Tile { width: parent.tw; visible: qs.hasSource; icon: qs.micMuted ? "mic-off-symbolic" : "mic-on-symbolic"; title: "Microphone"; status: qs.micStatus; on: qs.hasSource && !qs.micMuted; more: true
-                onToggled: if (qs.vol) qs.vol.toggleMicMute(); onOpened: qs.page = "sound" }
-            Tile { width: parent.tw; icon: "video-display-symbolic"; title: "Displays"; status: qs.bright ? qs.bright.label : ""; onToggled: qs.openKcm("kcm_kscreen") }
-            Tile { width: parent.tw; icon: "preferences-system-symbolic"; title: "System Settings"; onToggled: qs.openKcm("") } }
+            readonly property real th: 58 + spacing
+            // which cell a point (in grid coordinates) falls into, as an index into the shown list
+            function slotAt(x, y) { const c = Math.max(0, Math.min(1, Math.floor(x / (tw + spacing)))); const r = Math.max(0, Math.floor(y / th)); return r * 2 + c }
+            Repeater { id: tileRep; model: qs.arranging ? qs.arrangeList : qs.gridTiles
+                Tile { id: t; required property string modelData; readonly property var d: qs.tileData(modelData)
+                    width: grid.tw; visible: d.available || qs.arranging
+                    icon: d.icon; title: d.title; status: qs.arranging && !d.available ? "Not available here" : d.status; on: d.on && !qs.arranging; more: d.more && !qs.arranging
+                    onToggled: if (!qs.arranging) qs.tileToggle(modelData); onOpened: if (!qs.arranging) qs.tileOpen(modelData)
+                    // arranging: hidden tiles are dim; a right-click anywhere on a tile enters arranging
+                    readonly property bool shown: qs.arrangeOn.indexOf(modelData) >= 0
+                    opacity: qs.arranging && !shown ? 0.45 : 1; Behavior on opacity { NumberAnimation { duration: Config.quick } }
+                    TapHandler { acceptedButtons: Qt.RightButton; onTapped: qs.arranging = true }
+                    ArrBadge { tid: t.modelData }
+                    // drag to reorder while arranging: the tile lifts, the list is rewritten on release from the drop cell
+                    z: dh.active ? 2 : 0; scale: dh.active ? 1.04 : 1; Behavior on scale { NumberAnimation { duration: Config.quick } }
+                    DragHandler { id: dh; enabled: qs.arranging; target: null; dragThreshold: 6
+                        property real dx: 0; property real dy: 0
+                        onTranslationChanged: { dx = translation.x; dy = translation.y }
+                        onActiveChanged: if (!active) { const p = t.mapToItem(grid, t.width / 2 + dx, t.height / 2 + dy); qs.arrangeMove(t.modelData, grid.slotAt(p.x, p.y)); dx = 0; dy = 0 } }
+                    transform: Translate { x: dh.active ? dh.dx : 0; y: dh.active ? dh.dy : 0 } } } }
+        // arranging: a Done chip, and a hint
+        Item { visible: qs.arranging; width: parent.width; height: 34
+            Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "Drag to reorder · badge shows or hides"; color: Config.inkDim; font.pixelSize: 12 }
+            Rectangle { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; width: doneT.implicitWidth + 28; height: 30; radius: 15; color: Config.onFill
+                Text { id: doneT; anchors.centerIn: parent; text: "Done"; color: Config.onFg; font.pixelSize: 13; font.weight: Font.Medium }
+                HoverHandler { cursorShape: Qt.PointingHandCursor } TapHandler { onTapped: qs.arrangeDone() } } }
 
         // follow the sun: light by day, dark by night (QSAutoMode; the schedule from Night Light, else a configured location)
-        Rectangle { enabled: !qs.paletteOpen; width: parent.width; height: 44; radius: 18; color: Config.fg(0.055); border.width: 1; border.color: Config.fg(0.09)
+        Rectangle { id: sunRow; enabled: !qs.paletteOpen; visible: qs.rowShown("sun") || qs.arranging; opacity: qs.arranging && !qs.rowShown("sun") ? 0.45 : 1; width: parent.width; height: 44; radius: 18; color: Config.fg(0.055); border.width: 1; border.color: Config.fg(0.09)
+            ArrBadge { tid: "sun" } TapHandler { acceptedButtons: Qt.RightButton; onTapped: qs.arranging = true }
             Kirigami.Icon { id: sunIcon; x: 14; anchors.verticalCenter: parent.verticalCenter; width: 17; height: 17; source: autoMode.on && autoMode.wantDark ? "weather-clear-night-symbolic" : "weather-clear-symbolic"; isMask: true; color: Config.fgSolid; opacity: 0.9; roundToIconSize: false }
             Column { anchors.left: sunIcon.right; anchors.leftMargin: 12; anchors.right: sunSwitch.left; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; spacing: 1
                 Text { width: parent.width; text: "Follow the sun"; color: Config.ink; font.pixelSize: 13; font.weight: Font.Medium; elide: Text.ElideRight }
@@ -274,7 +344,8 @@ Item {
             GlassSwitch { id: sunSwitch; anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; checked: autoMode.on; opacity: autoMode.canSchedule || autoMode.on ? 1 : 0.45
                 onToggled: on => autoMode.setOn(on) } }
         // sliders share one glass tile, a hairline between them
-        Rectangle { enabled: !qs.paletteOpen; width: parent.width; height: sliders.implicitHeight + 8; radius: 18; color: Config.fg(0.055); border.width: 1; border.color: Config.fg(0.09)
+        Rectangle { id: slidersRow; enabled: !qs.paletteOpen; visible: qs.rowShown("sliders") || qs.arranging; opacity: qs.arranging && !qs.rowShown("sliders") ? 0.45 : 1; width: parent.width; height: sliders.implicitHeight + 8; radius: 18; color: Config.fg(0.055); border.width: 1; border.color: Config.fg(0.09)
+            ArrBadge { tid: "sliders" } TapHandler { acceptedButtons: Qt.RightButton; onTapped: qs.arranging = true }
             Column { id: sliders; y: 4; width: parent.width
                 SliderRow { width: parent.width; visible: qs.canDim; icon: "brightness-high-symbolic"
                     value: qs.bright ? qs.bright.pct : 0

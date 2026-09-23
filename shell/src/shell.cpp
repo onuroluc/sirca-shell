@@ -1,4 +1,5 @@
 #include "shell.h"
+#include <QJSValue>
 #include "shellcorona.h"
 #include "osdservice.h"
 #include <KGlobalAccel>
@@ -357,10 +358,18 @@ void Shell::writeConfigObject(const QJsonObject &o)
     QTimer::singleShot(0, this, [this] { ++m_configRevision; Q_EMIT configRevisionChanged(); });
 }
 
+// A JS array or object reaches a QVariant parameter wrapped as a QJSValue, which QJsonValue::fromVariant turns into null
+// (Quick settings' tile list was written as null, 2026-09-23): unwrap it first.
+static QJsonValue jsonFrom(const QVariant &v)
+{
+    if (v.userType() == qMetaTypeId<QJSValue>()) return QJsonValue::fromVariant(v.value<QJSValue>().toVariant());
+    return QJsonValue::fromVariant(v);
+}
+
 void Shell::saveConfigKeys(const QVariantMap &values)
 {
     QJsonObject o = readConfigObject();
-    for (auto it = values.begin(); it != values.end(); ++it) o.insert(it.key(), QJsonValue::fromVariant(it.value()));
+    for (auto it = values.begin(); it != values.end(); ++it) o.insert(it.key(), jsonFrom(it.value()));
     writeConfigObject(o);
 }
 
@@ -389,7 +398,7 @@ QVariantMap Shell::sysStats()
 void Shell::saveConfigKey(const QString &key, const QVariant &value)
 {
     QJsonObject o = readConfigObject();
-    o.insert(key, QJsonValue::fromVariant(value));
+    o.insert(key, jsonFrom(value));
     writeConfigObject(o);
 }
 
@@ -760,6 +769,18 @@ void Shell::raiseWallpaper()
 
 // ---- update check ---------------------------------------------------------------------------------------------------
 QString Shell::buildCommit() const { return QStringLiteral(GLASS_BUILD_COMMIT); }
+QString Shell::version() const { return QStringLiteral(GLASS_VERSION); }
+
+// "0.5.10" > "0.5.9": numeric per component, a missing component counts as 0
+static int versionCompare(const QString &a, const QString &b)
+{
+    const QStringList x = a.split(QLatin1Char('.')), y = b.split(QLatin1Char('.'));
+    for (int i = 0; i < qMax(x.size(), y.size()); ++i) {
+        const int p = i < x.size() ? x[i].toInt() : 0, q = i < y.size() ? y[i].toInt() : 0;
+        if (p != q) return p < q ? -1 : 1;
+    }
+    return 0;
+}
 
 static QString installedRoot()
 {
@@ -774,22 +795,22 @@ void Shell::checkForUpdate(bool announceUpToDate)
     const QVariantMap cfg = loadConfig();
     const QString repo = cfg.value(QStringLiteral("updateRepo"), QStringLiteral("onuroluc/sirca-shell")).toString();
     const QString branch = cfg.value(QStringLiteral("updateBranch"), QStringLiteral("main")).toString();
-    if (buildCommit().isEmpty()) { qInfo("sirca-shell: update check: this build carries no commit id"); return; }
+    // Releases are versions, not commits: main only moves per release, so the VERSION file on the branch IS the newest
+    // release (one small raw-file GET, no API, no rate limit). A dev build newer than the release stays quiet.
     static QNetworkAccessManager *nam = nullptr;
     if (!nam) nam = new QNetworkAccessManager(this);
-    QNetworkRequest req(QUrl(QStringLiteral("https://api.github.com/repos/%1/commits/%2").arg(repo, branch)));
-    req.setRawHeader("Accept", "application/vnd.github.sha");            // the reply body is the bare sha
+    QNetworkRequest req(QUrl(QStringLiteral("https://raw.githubusercontent.com/%1/%2/VERSION").arg(repo, branch)));
     req.setRawHeader("User-Agent", QCoreApplication::applicationName().toUtf8());
     req.setTransferTimeout(15000);
     QNetworkReply *r = nam->get(req);
-    connect(r, &QNetworkReply::finished, this, [this, r, announceUpToDate] {
+    connect(r, &QNetworkReply::finished, this, [this, r, announceUpToDate, repo, branch] {
         r->deleteLater();
         if (r->error() != QNetworkReply::NoError) { qInfo("sirca-shell: update check failed: %s", qPrintable(r->errorString())); return; }
         const QString remote = QString::fromUtf8(r->readAll()).trimmed();
-        if (remote.size() < 7) return;
-        qInfo("sirca-shell: update check: this build %s, repository %s", qPrintable(buildCommit().left(7)), qPrintable(remote.left(7)));
-        if (remote.startsWith(buildCommit()) || buildCommit().startsWith(remote)) {
-            if (announceUpToDate) notify(QStringLiteral("Up to date"), QStringLiteral("This is the newest version (%1).").arg(buildCommit().left(7)), QString());
+        if (remote.isEmpty() || remote.size() > 32 || !remote[0].isDigit()) { qInfo("sirca-shell: update check: no version file on %s/%s", qPrintable(repo), qPrintable(branch)); return; }
+        qInfo("sirca-shell: update check: this is %s, the release is %s", qPrintable(version()), qPrintable(remote));
+        if (versionCompare(remote, version()) <= 0) {
+            if (announceUpToDate) notify(QStringLiteral("Up to date"), QStringLiteral("Sirca Shell %1 is the newest version.").arg(version()), QString());
             return;
         }
         Q_EMIT updateAvailable(remote);
@@ -802,8 +823,8 @@ void Shell::checkForUpdate(bool announceUpToDate)
         QDBusMessage m = QDBusMessage::createMethodCall(svc, path, svc, QStringLiteral("Notify"));
         QVariantMap hints{{QStringLiteral("desktop-entry"), QStringLiteral("sirca-shell")}, {QStringLiteral("resident"), true}};
         const QStringList actions{QStringLiteral("default"), QStringLiteral("Update now"), QStringLiteral("update"), QStringLiteral("Update now")};
-        m.setArguments({QStringLiteral("Sirca Shell"), uint(0), QStringLiteral("system-software-update"), QStringLiteral("A new version is available"),
-                        QStringLiteral("You have %1, the repository is at %2. Update now pulls it and re-runs the installer in a terminal.").arg(buildCommit().left(7), remote.left(7)), actions, hints, 0});
+        m.setArguments({QStringLiteral("Sirca Shell"), uint(0), QStringLiteral("system-software-update"), QStringLiteral("Sirca Shell %1 is available").arg(remote),
+                        QStringLiteral("You have %1. Update now pulls the new version and re-runs the installer in a terminal.").arg(version()), actions, hints, 0});
         auto *w = new QDBusPendingCallWatcher(bus.asyncCall(m), this);
         connect(w, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *w) { w->deleteLater(); const QDBusPendingReply<uint> reply = *w; if (!reply.isError()) m_notifyPaths.insert(reply.value(), QStringLiteral("<update>")); });
     });

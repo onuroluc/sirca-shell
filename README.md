@@ -100,9 +100,10 @@ sirca-shell-switch off     # your panels come back exactly as they were
 
 Keep the cloned folder if you install the light/dark switch. `glass-mode` and the theme generators run from it.
 
-**Updating:** `./update.sh` in the cloned folder pulls the newest version and re-runs the installer with the parts you
-chose. The installer asks once whether the shell may check GitHub for a new version (once a day, one small request,
-nothing else is sent; off by default). If you say yes, a notification with an "Update now" button appears when there is
+**Updating:** releases are numbered (`VERSION`, the tags, and [CHANGELOG.md](CHANGELOG.md)); main only moves when one is
+released, so `./update.sh` in the cloned folder always lands on a release: it pulls and re-runs the installer with the parts you
+chose. The installer asks once whether the shell may check GitHub for a newer version (once a day, one small request for the
+`VERSION` file, nothing else is sent; off by default). If you say yes, a notification with an "Update now" button appears when there is
 one. The switch is in the shell's settings under Behaviour.
 
 ## What works and what does not

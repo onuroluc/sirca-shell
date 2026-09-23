@@ -109,7 +109,7 @@ Window {
                         Row_ { label: "Native calendar"; hint: "The popup behind the clock. Off = the hosted Plasma clock applet"; key: "nativeCalendar"
                             GlassSwitch { checked: Config.nativeCalendar; onToggled: on => win.setKey("nativeCalendar", on, true) } } }
                     Section { title: "Updates"
-                        Row_ { label: "Check for updates"; hint: "Once a day the shell asks GitHub whether the repository has moved on from this build (" + Shell.buildCommit.substring(0, 7) + "). Nothing else is sent. A notification then offers to update"; key: "updateCheck"
+                        Row_ { label: "Check for updates"; hint: "Once a day the shell asks GitHub whether a newer version than " + Shell.version + " was released. Nothing else is sent. A notification then offers to update"; key: "updateCheck"
                             GlassSwitch { checked: Config.get("updateCheck", false) === true; onToggled: on => win.setKey("updateCheck", on, true) } }
                         Row_ { label: "Check now"; hint: "Asks right away and tells you either way"
                             Rectangle { width: cnt.implicitWidth + 24; height: 28; radius: 14; color: Config.fg(cnh.hovered ? 0.16 : 0.09)
@@ -141,6 +141,14 @@ Window {
                         Row_ { label: "Native notifications"; hint: "Cards and history drawn by the shell. Off = the hosted Plasma applet"; key: "nativeNotifications"
                             GlassSwitch { checked: Config.nativeNotifications; onToggled: on => win.setKey("nativeNotifications", on, true) } } }
                     Section { title: "Quick settings"
+                        Row_ { label: "Tiles"; hint: "What the panel shows. Right-click a tile in the panel to drag them into another order"; key: "qsTiles"; height: 58 + Math.max(0, tileFlow.implicitHeight - 30)
+                            Flow { id: tileFlow; width: 330; spacing: 6
+                                readonly property var names: ({ network: "Network", bluetooth: "Bluetooth", dnd: "Do Not Disturb", nightlight: "Night Light", power: "Power profile", caffeine: "Caffeine", mic: "Microphone", displays: "Displays", settings: "System Settings", sun: "Follow the sun", sliders: "Sliders" })
+                                readonly property var all: ["network", "bluetooth", "dnd", "nightlight", "power", "caffeine", "mic", "displays", "settings", "sun", "sliders"]
+                                readonly property var shown: { const v = Config.get("qsTiles", null); return v && v.length !== undefined ? Array.prototype.slice.call(v) : all }
+                                Repeater { model: tileFlow.all
+                                    Chip { required property string modelData; text: tileFlow.names[modelData]; on: tileFlow.shown.indexOf(modelData) >= 0
+                                        onTapped: { let l = tileFlow.shown.slice(); if (on) l = l.filter(x => x !== modelData); else l.push(modelData); win.setKey("qsTiles", l, true) } } } } }
                         Row_ { label: "Native quick settings"; hint: "Our own panel. Off = the hosted Plasma applet"; key: "nativeControl"
                             GlassSwitch { checked: Config.nativeControl; onToggled: on => win.setKey("nativeControl", on, true) } } }
                     Section { title: "Content"
@@ -215,6 +223,7 @@ Window {
                 // About
                 Column { visible: win.page === 5; width: parent.width; spacing: 18
                     Section { title: "Sirca Shell"
+                        Row_ { label: "Version"; Text { text: Shell.version + (Shell.buildCommit !== "" ? "  ·  build " + Shell.buildCommit.substring(0, 7) : ""); color: Config.inkDim; font.pixelSize: 12; font.features: { "tnum": 1 } } }
                         Row_ { label: "Config file"; Text { text: Shell.configPath(); color: Config.inkDim; font.pixelSize: 12 } }
                         Row_ { label: "Changed settings"; Text { text: Config.user ? Object.keys(Config.user).filter(k => k !== "launchers").length + " keys" : "0 keys"; color: Config.inkDim; font.pixelSize: 12 } }
                         Row_ { label: "Reload the shell"; hint: "Checks the build first; a broken build is refused"; Chip { text: "Reload"; enabled: Shell.toolPath("sirca-shell-reload") !== ""; opacity: enabled ? 1 : 0.4; onTapped: { const p = Shell.toolPath("sirca-shell-reload"); if (p !== "") Shell.runDetached(p, []) } } } } }

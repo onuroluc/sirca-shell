@@ -98,8 +98,10 @@ public:
     // bumps whenever config.json changes on disk (from the settings window, an editor, anything): Config.qml re-reads, so
     // every design token is live
     // is Plasma's desktop shell on the bus? (our wallpaper layer shows by itself only when it is not)
-    Q_PROPERTY(QString buildCommit READ buildCommit CONSTANT)     // the git commit this binary was built from (update check)
+    Q_PROPERTY(QString buildCommit READ buildCommit CONSTANT)     // the git commit this binary was built from (About page)
     QString buildCommit() const;
+    Q_PROPERTY(QString version READ version CONSTANT)             // the released version (CMake project VERSION): what the update check compares
+    QString version() const;
     Q_PROPERTY(bool plasmaRunning READ plasmaRunning NOTIFY plasmaRunningChanged)
     bool plasmaRunning() const { return m_plasmaRunning; }
     // "withoutPlasmashell": true in config.json (set by sirca-shell-switch): the shell serves org.kde.osdService itself
@@ -160,7 +162,7 @@ Q_SIGNALS:
     void grabRegionRequested(int x, int y, int w, int h);
     void desktopMenuRequested(int x, int y);
     void remapWallpaperRequested();
-    void updateAvailable(const QString &commit);
+    void updateAvailable(const QString &version);
     void switcherRequested(bool reverse);
     void shortcutActivated(const QString &id);   // one of the shell's own global shortcuts fired (see kShortcuts in shell.cpp)      // Alt+Tab / Alt+Shift+Tab (global shortcuts owned with --own-launcher-key)
 private Q_SLOTS:
