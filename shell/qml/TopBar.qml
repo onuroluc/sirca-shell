@@ -51,7 +51,10 @@ Surface {
     // a lobe takes the keyboard and closes when it loses it (Surface.popupFocus); notification cards only make the bar
     // focusable on demand (a reply field), they must never pull the keyboard away from what you are typing in
     popupFocus: openLobe !== ""
-    restingKeyboardMode: cardCount > 0 ? "ondemand" : "none"
+    // A card on screen must NOT make the bar keyboard-interactive: KWin activates an on-demand layer surface the moment it
+    // becomes one, i.e. every popup took the focus away from what you were typing in (2026-09-24). Only an open reply
+    // field asks for the keyboard.
+    restingKeyboardMode: (Config.nativeNotifications && nativeCards.replyingCount > 0) ? "ondemand" : "none"
     onFocusLost: openLobe = ""
     property var recorder: null                // Main's Recorder: the bar shows a pill while it records
     signal showDesktopRequested()

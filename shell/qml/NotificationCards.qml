@@ -13,6 +13,8 @@ Item {
         let s = done > 0 ? (total > 0 ? bytes(done) + " of " + bytes(total) : bytes(done)) : ""; if (speed > 0) s += (s ? "  ·  " : "") + bytes(speed) + "/s"; return s }
     function jobUnknown(m) { const d = m.jobDetails; return m.jobState === NotificationManager.Notifications.JobStateRunning && !(m.percentage > 0) && !(d && Number(d.totalBytes) > 0) }
     readonly property int count: rep.count
+    // how many cards have their reply field open: only then does the bar need the keyboard (see TopBar.restingKeyboardMode)
+    property int replyingCount: 0
     // A game or a full-screen video has focus: no popups (on this machine a popup over a running game can even trigger the
     // GPU driver's hang). Critical ones still come through; everything else goes to the history unseen, the bell shows it.
     property bool muted: false
@@ -46,6 +48,8 @@ Item {
             delegate: NotifCard { id: c
                 required property int index
                 required property var model
+                onReplyingChanged: cards.replyingCount += replying ? 1 : -1
+                Component.onDestruction: if (replying) cards.replyingCount--
                 readonly property var idx: popups.index(index, 0)
                 readonly property bool job: model.type === NotificationManager.Notifications.JobType
                 appName: model.applicationName || ""; appIcon: model.applicationIconName || ""
@@ -56,7 +60,9 @@ Item {
                 critical: model.urgency === NotificationManager.Notifications.CriticalUrgency
                 low: model.urgency === NotificationManager.Notifications.LowUrgency
                 canReply: model.hasReplyAction || false; replyPlaceholder: model.replyPlaceholderText || ""
-                isJob: job; jobPercent: model.percentage || 0
+                // a job that stopped without an error is done whatever its last percentage said (a download that finished at
+                // once never reported 100 and showed "Done" next to an empty bar, 2026-09-24)
+                isJob: job; jobPercent: (job && model.jobState === NotificationManager.Notifications.JobStateStopped && !(model.jobDetails && model.jobDetails.error)) ? 100 : (model.percentage || 0)
                 jobBusy: job && cards.jobUnknown(model); jobInfo: job ? cards.jobLine(model) : ""
                 jobNote: job && model.jobState === NotificationManager.Notifications.JobStateStopped ? "Done" : (job && model.jobState === NotificationManager.Notifications.JobStateSuspended ? "Paused" : "")
                 // our own timeout: -1 = the user's default, 0 = stays; jobs stay while they run, and so does a critical one

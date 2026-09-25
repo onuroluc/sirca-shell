@@ -2,6 +2,15 @@
 
 Versions, newest first. `./update.sh` brings you to the newest one; the shell can also check once a day (Sirca Settings › Behaviour › Updates).
 
+## 0.7.2 (2026-09-25)
+
+- The installer bounces the KWin effect after installing it, so an update never leaves the running effect with stale
+  settings (blur was off after the 0.7.0 update until the effect was reloaded or the session restarted).
+- Fixed: after login the volume slider could show muted and the Microphone tile "unavailable" until the output device was changed away and back.
+- Fixed: a notification popup took the keyboard focus away from the window you were typing in. The bar asks for the keyboard only while a reply field is open.
+- Fixed: a download that finished at once showed "Done" next to an empty progress bar.
+- The update check ignores the CDN's cache, so a new release shows up at once.
+
 ## 0.7.1 (2026-09-23)
 
 - Fixed: after `sirca-shell-switch off`, `on` said the unit does not exist (the installer had linked the systemd unit,

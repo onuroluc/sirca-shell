@@ -161,7 +161,10 @@ i_effect() {
     say "  ${B}sudo:${N} copying the effect plugins into KWin's plugin folder"
     run "install the KWin effect (sudo)" sudo cmake --install "$ROOT/kwin-effects/build" || return 1
     [ $DRY = 1 ] || cp "$ROOT/kwin-effects/build/install_manifest.txt" "$STATE/effect-manifest.txt" 2>/dev/null
-    run "switch KWin's own blur off, the glass effect on" bash -c '[ -f "$1/blur-was.txt" ] || kreadconfig6 --file kwinrc --group Plugins --key blurEnabled --default true > "$1/blur-was.txt"; kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled false; kwriteconfig6 --file kwinrc --group Plugins --key glassEnabled true; kwriteconfig6 --file kwinrc --group Plugins --key glasskeyEnabled true; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect blur >/dev/null; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect glass >/dev/null; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect glasskey >/dev/null; true' _ "$STATE"; }
+    # the effects are unloaded and loaded again: a running effect only reads its settings when it loads (after an update the
+    # old build sat there with stale settings and blurred nothing until it was bounced, 2026-09-23). The NEW build itself
+    # comes up at the next login: KWin keeps the old file mapped.
+    run "switch KWin's own blur off, the glass effect on" bash -c '[ -f "$1/blur-was.txt" ] || kreadconfig6 --file kwinrc --group Plugins --key blurEnabled --default true > "$1/blur-was.txt"; kwriteconfig6 --file kwinrc --group Plugins --key blurEnabled false; kwriteconfig6 --file kwinrc --group Plugins --key glassEnabled true; kwriteconfig6 --file kwinrc --group Plugins --key glasskeyEnabled true; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect blur >/dev/null; for e in glass glasskey; do qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect $e >/dev/null 2>&1; qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect $e >/dev/null; done; true' _ "$STATE"; }
 i_look() { run "KDE colour scheme and GTK look (backups in ~/.local/state/glass-desktop)" "$ROOT/desktop/tools/apply_all.sh" apply; }
 i_mode() {
     if [ "$HAVE_PAPIRUS" = 0 ]; then

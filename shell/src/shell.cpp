@@ -945,7 +945,8 @@ void Shell::checkForUpdate(bool announceUpToDate)
     // release (one small raw-file GET, no API, no rate limit). A dev build newer than the release stays quiet.
     static QNetworkAccessManager *nam = nullptr;
     if (!nam) nam = new QNetworkAccessManager(this);
-    QNetworkRequest req(QUrl(QStringLiteral("https://raw.githubusercontent.com/%1/%2/VERSION").arg(repo, branch)));
+    // (the query defeats the CDN's five-minute cache per edge: a release showed up as "up to date" for a while, 2026-09-23)
+    QNetworkRequest req(QUrl(QStringLiteral("https://raw.githubusercontent.com/%1/%2/VERSION?t=%3").arg(repo, branch).arg(QDateTime::currentSecsSinceEpoch())));
     req.setRawHeader("User-Agent", QCoreApplication::applicationName().toUtf8());
     req.setTransferTimeout(15000);
     QNetworkReply *r = nam->get(req);

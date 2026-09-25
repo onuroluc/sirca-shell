@@ -16,6 +16,7 @@
       "gear"
     ],
     "barTintAlpha": 0.5,
+    "dockTintAlpha": 0.3,
     "dockWidthMode": "fit"
   }
 }

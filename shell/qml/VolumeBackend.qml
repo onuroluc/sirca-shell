@@ -6,7 +6,18 @@ import org.kde.kitemmodels as KItemModels
 import org.kde.plasma.private.volume
 
 QtObject {
-    readonly property var sink: PreferredDevice.sink
+    // PreferredDevice.sink / .source can stay null after login even though the device models are fine (the default
+    // arrived before its object did; 2026-09-24: "the audio looks muted until I switch the output away and back", and the
+    // microphone tile said unavailable). Fall back to the model row that says it is the default, re-checked on every model
+    // change, and log once when the fallback carried the day so the journal shows it happened.
+    property int _tick: 0
+    function _defaultIn(model) { const r = model.KItemModels.KRoleNames.role("PulseObject"); for (let i = 0; i < model.rowCount(); ++i) { const o = model.data(model.index(i, 0), r); if (o && o.default) return o } return null }
+    // (_tick comes in as an argument: a bare read in a binding is optimised away, see Config.load)
+    function _pick(preferred, model, what, tick) { if (preferred) return preferred; const o = _defaultIn(model); if (o && !_told[what]) { _told[what] = true; console.log("sound: PreferredDevice." + what + " is null, using the model's default", o.name) } return o }
+    property var _told: ({})
+    readonly property var _watch: Connections { target: sinks; function onRowsInserted() { _tick++ } function onRowsRemoved() { _tick++ } function onModelReset() { _tick++ } function onDataChanged() { _tick++ } }
+    readonly property var _watch2: Connections { target: sources; function onRowsInserted() { _tick++ } function onRowsRemoved() { _tick++ } function onModelReset() { _tick++ } function onDataChanged() { _tick++ } }
+    readonly property var sink: _pick(PreferredDevice.sink, sinks, "sink", _tick)
     readonly property bool hasSink: sink && sink.name !== "auto_null"
     readonly property int pct: hasSink ? Math.round(sink.volume / PulseAudio.NormalVolume * 100) : 0
     readonly property bool muted: hasSink ? sink.muted : false
@@ -21,7 +32,7 @@ QtObject {
     readonly property var sources: PulseObjectFilterModel { filterOutInactiveDevices: true; sourceModel: SourceModel {} }
     // ---- microphone: the default source, and who is recording from it right now (source outputs = capture streams;
     // virtual ones are monitors and loopbacks, not apps listening)
-    readonly property var source: PreferredDevice.source
+    readonly property var source: _pick(PreferredDevice.source, sources, "source", _tick)
     readonly property bool hasSource: source && source.name !== "auto_null"
     readonly property bool micMuted: hasSource ? source.muted : false
     readonly property string sourceName: hasSource ? String(source.description || source.name || "") : ""
